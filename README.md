@@ -76,7 +76,7 @@ or when the class is continues value of survival days:
     TNBC2, 3822
 
 ### Find discriminative motifs in nutshell
-##### TL;DR For more comprehensive explanation please refer to TNBC notebook demo under the demo folder
+##### TL;DR For more comprehensive explanation please refer to TNBC notebook demo under the demo folder [Notebook](./analysis/Tutorial/mibitof_tnbc_tutorial.ipynb)
 
 #### Initiate CISM class with the configuration:
 
@@ -148,6 +148,4 @@ discover_result.discriminative_motifs will plot the full dataframe with all the 
     ....
     ....
 
-##### TL;DR For more comprehensive explanation please refer to TNBC notebook demo under the demo folder
-
-[Notebook](./analysis/Tutorial/mibitof_tnbc_tutorial.ipynb)
+##### For more comprehensive explanation please refer to TNBC notebook demo under the demo folder [Notebook](./analysis/Tutorial/mibitof_tnbc_tutorial.ipynb)
