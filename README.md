@@ -150,4 +150,4 @@ discover_result.discriminative_motifs will plot the full dataframe with all the 
 
 ##### TL;DR For more comprehensive explanation please refer to TNBC notebook demo under the demo folder
 
-[Notebook](./analysis/tutorial/mibitof_tnbc_tutorial.ipynb)
+[Notebook](./analysis/Tutorial/mibitof_tnbc_tutorial.ipynb)
