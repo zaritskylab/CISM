@@ -10,3 +10,4 @@
 /spatial_view/
 *.pyc
 .ipynb_checkpoints
+/.idea
