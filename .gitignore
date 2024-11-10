@@ -1,0 +1,12 @@
+/venv/
+/data/
+/fanmod_output/
+/parse_cache/
+/data_archive/
+/notebook_archive/
+/TNBC_morph/
+/spatial_view/
+/results/
+/spatial_view/
+*.pyc
+.ipynb_checkpoints
