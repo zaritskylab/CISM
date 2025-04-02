@@ -1,8 +1,8 @@
-import torch
 import torch.nn.functional as F
 import plotly.graph_objs as go
 import networkx as nx
 import numpy as np
+
 
 def get_node_importance(model, data):
     """
@@ -18,6 +18,7 @@ def get_node_importance(model, data):
     importance_scores = data.x.grad.abs().cpu().numpy()
     
     return importance_scores
+
 
 def visualize_graph_with_importance_interactive(data, importance_scores, cell_type_decoder, threshold='auto', output_html="graph.html"):
     """
@@ -99,6 +100,8 @@ def visualize_graph_with_importance_interactive(data, importance_scores, cell_ty
                     )
     fig.write_html(output_html)
     print(f"Interactive graph saved to {output_html}")
+
+
 '''
 ## Example usage, once you have a trained model:
 with open('mel_alpha_0.01_buffer_0.pickle', 'rb') as p:

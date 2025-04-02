@@ -1,12 +1,6 @@
 import torch
-import torch.nn.functional as F
 from torch_geometric.nn import GCNConv, global_max_pool
-from torch_geometric.data import Data, Dataset
-from sklearn.model_selection import StratifiedKFold, LeaveOneOut, train_test_split
-from sklearn.metrics import roc_auc_score
-import numpy as np
-from tqdm import tqdm
-import pickle
+
 
 class GCNBlock(torch.nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -20,6 +14,7 @@ class GCNBlock(torch.nn.Module):
         x = self.relu(x)
         x = self.dropout(x)
         return x
+
 
 class GCN_Model(torch.nn.Module):
     def __init__(self, input_size, hidden_channels=[75, 150, 50], output_size=1):
@@ -42,4 +37,3 @@ class GCN_Model(torch.nn.Module):
         x = self.output_layer(x)
         x = torch.sigmoid(x)
         return x
-

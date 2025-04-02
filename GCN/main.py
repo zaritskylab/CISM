@@ -1,13 +1,9 @@
 import torch
 import torch.nn.functional as F
-from torch_geometric.nn import GCNConv, global_max_pool
-from torch_geometric.data import Data, Dataset
 from sklearn.model_selection import StratifiedKFold, LeaveOneOut, train_test_split
-from sklearn.metrics import roc_auc_score
 import numpy as np
-from tqdm import tqdm
-import pickle
 from model import GCN_Model
+
 
 def train(model, data_dict, train_indices, optimizer, device):
     model.train()
@@ -21,6 +17,7 @@ def train(model, data_dict, train_indices, optimizer, device):
         optimizer.step()
         total_loss += loss.item()
     return total_loss / len(train_indices)
+
 
 def evaluate(model, data_dict, val_indices, device):
     model.eval()
@@ -36,6 +33,7 @@ def evaluate(model, data_dict, val_indices, device):
     val_loss = F.binary_cross_entropy(y_pred, y_true)
     return val_loss.item(), y_true.numpy(), y_pred.numpy()
 
+
 def train_and_validate(data_dict, model, optimizer, train_idx, val_idx, device, epochs=50):
     best_val_loss = float('inf')
     best_model_state = None
@@ -47,6 +45,7 @@ def train_and_validate(data_dict, model, optimizer, train_idx, val_idx, device, 
             best_model_state = model.state_dict()  # Save the best model on val examples
     
     return best_model_state
+
 
 def cross_validation(preprocessed_data, group1, group2, cv_type="3-fold", epochs=500, lr=4e-3, test_size=0.2):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -76,6 +75,8 @@ def cross_validation(preprocessed_data, group1, group2, cv_type="3-fold", epochs
     test_loss, y_true, y_pred = evaluate(model, preprocessed_data, test_indices, device)
 
     return np.array(y_true), np.array(y_pred), model
+
+
 '''
 ### Example usage, run after creating a pickle dataset :
 
