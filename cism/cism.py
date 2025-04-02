@@ -11,7 +11,6 @@ from joblib import Parallel, delayed
 from joblib.externals.loky import set_loky_pickler
 import os
 import enum
-# import modin.pandas as pd
 import pandas as pd
 import networkx as nx
 import numpy as np
@@ -502,7 +501,7 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
                                                         tissue_state_func=tissue_state_func)
         self.common_cells = common_cells_type
 
-    def get_patients_class(self, classes: list=None) -> pd.DataFrame:
+    def get_patients_class(self, classes: list = None) -> pd.DataFrame:
         if classes is None:
             classes = self.patient_class_df.patient_class.unique()
         exist_patients = self.cism.motifs_dataset.Patient_uId.unique()

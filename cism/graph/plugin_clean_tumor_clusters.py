@@ -2,7 +2,6 @@ import networkx as nx
 from scipy.spatial import ConvexHull, Delaunay
 import numpy as np
 import alphashape
-from shapely.geometry import Polygon
 from shapely.geometry import Point
 
 
@@ -92,7 +91,7 @@ def remove_nodes_inside_alpha_shape(G, alpha_shapes):
     Removes nodes from the graph that are inside the given alpha shape.
 
     :param G: The original graph.
-    :param alpha_shape: A Shapely polygon representing the alpha shape.
+    :param alpha_shapes: A Shapely polygon representing the alpha shape.
     :return: The modified graph with nodes removed.
     """
     positions = nx.get_node_attributes(G, 'pos')
