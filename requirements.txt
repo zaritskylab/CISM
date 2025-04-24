@@ -55,9 +55,9 @@ nest-asyncio==1.5.6
 networkx==3.1
 notebook==6.5.2
 notebook-shim==0.2.2
-numpy==1.25.2
+numpy==1.24.4
 packaging==23.2
-pandas==2.2.2
+pandas==2.0.3
 pandocfilters==1.5.0
 parso==0.8.3
 pickleshare==0.7.5
@@ -74,8 +74,6 @@ pyrsistent==0.19.3
 python-dateutil==2.8.2
 python-json-logger==2.0.4
 pytz==2023.3.post1
-pywin32==305
-pywinpty==2.0.10
 PyYAML==6.0.1
 pyzmq==25.0.0
 qtconsole==5.4.0
