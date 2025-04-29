@@ -1,31 +1,25 @@
 import torch
-import torch.nn.functional as F
-from torch_geometric.nn import GCNConv, global_max_pool
 from torch_geometric.data import Data, Dataset
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import LeaveOneOut
-from sklearn.metrics import roc_auc_score, roc_curve
 from sklearn.preprocessing import OneHotEncoder
 from scipy.spatial import Delaunay
-import matplotlib.pyplot as plt
-from tqdm import tqdm
-import itertools
 import networkx as nx
-from scipy.spatial import ConvexHull
 import alphashape
 from shapely.geometry import Point
-import pickle
-import sys
 import warnings
+
 warnings.filterwarnings("ignore")
+
+
 class CellGraphDataset(Dataset):
-    def __init__(self, csv_path, groups, max_distance=100, transform=None, pre_transform=None, 
+    def __init__(self, csv_path, groups, max_distance=100, transform=None, pre_transform=None,
                  cells_to_filter=None, alpha=0.01, buffer_value=0):
         super().__init__(transform, pre_transform)
         self.df = pd.read_csv(csv_path)
         self.df = self.df[self.df['Group'].isin(groups)]
-        self.patient_fov_combos = self.df.groupby(['patient number', 'fov', 'Group']).size().reset_index()[['patient number', 'fov', 'Group']]
+        self.patient_fov_combos = self.df.groupby(['patient number', 'fov', 'Group']).size().reset_index()[
+            ['patient number', 'fov', 'Group']]
         self.pred_encoder = OneHotEncoder(sparse=False).fit(self.df[['pred']])
         self.group_encoder = {group: i for i, group in enumerate(self.df['Group'].unique())}
         self.max_distance = max_distance
@@ -40,13 +34,13 @@ class CellGraphDataset(Dataset):
         patient = self.patient_fov_combos.iloc[idx]['patient number']
         fov = self.patient_fov_combos.iloc[idx]['fov']
         group = self.patient_fov_combos.iloc[idx]['Group']
-        
+
         data_p = self.df[(self.df['patient number'] == patient) & (self.df['fov'] == fov)]
-        
+
         ### Filter out the specified cell types
         if self.cells_to_filter:
             data_p = data_p[~data_p['pred'].isin(self.cells_to_filter)]
-        
+
         # Create initial graph
         G = nx.Graph()
         for i, row in data_p.iterrows():
@@ -61,7 +55,7 @@ class CellGraphDataset(Dataset):
 
         edges = []
         for i in range(len(coords)):
-            i_neigh = neighbours[indptr_neigh[i]:indptr_neigh[i+1]]
+            i_neigh = neighbours[indptr_neigh[i]:indptr_neigh[i + 1]]
             for j in i_neigh:
                 if np.linalg.norm(coords[i] - coords[j]) <= self.max_distance:
                     edges.append([i, j])
@@ -118,6 +112,8 @@ class CellGraphDataset(Dataset):
         filtered_subgraph = G.subgraph(nodes_to_remove).copy()
         G.remove_nodes_from(nodes_to_remove)
         return filtered_subgraph, G
+
+
 '''
 # Example usage
 def preprocess_dataset(dataset):

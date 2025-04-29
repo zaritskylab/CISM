@@ -12,7 +12,6 @@ from joblib import Parallel, delayed
 from joblib.externals.loky import set_loky_pickler
 import os
 import enum
-# import modin.pandas as pd
 import pandas as pd
 import networkx as nx
 import numpy as np
@@ -74,24 +73,24 @@ class CISM:
 
         for r, d, files in os.walk(self.network_dataset_root_path + dataset_folder):
             Parallel(n_jobs=n_jobs, prefer=prefer)(delayed(self._analyze_dataset)(
-                                                                        file=file,
-                                                                        output_dir=self.fanmod_output_root_path + dataset_folder,
-                                                                        cache_dir=self.fanmod_cache_root_path + dataset_folder,
-                                                                        force_run_fanmod=force_run_fanmod,
-                                                                        raw_data_folder=self.network_dataset_root_path + dataset_folder,
-                                                                        force_parse=force_parse,
-                                                                        enable_parse=False) for file in tqdm(files))
+                file=file,
+                output_dir=self.fanmod_output_root_path + dataset_folder,
+                cache_dir=self.fanmod_cache_root_path + dataset_folder,
+                force_run_fanmod=force_run_fanmod,
+                raw_data_folder=self.network_dataset_root_path + dataset_folder,
+                force_parse=force_parse,
+                enable_parse=False) for file in tqdm(files))
 
             result_list = Parallel(n_jobs=n_jobs, prefer=prefer, return_as="generator")(delayed(self._analyze_dataset)(
-                                                                        file=file,
-                                                                        output_dir=self.fanmod_output_root_path + dataset_folder,
-                                                                        cache_dir=self.fanmod_cache_root_path + dataset_folder,
-                                                                        force_run_fanmod=False,
-                                                                        raw_data_folder=self.network_dataset_root_path + dataset_folder,
-                                                                        force_parse=force_parse,
-                                                                        enable_parse=True,
-                                                                        p_value=p_value,
-                                                                        quantile_threshold=quantile_threshold) for file in tqdm(files))
+                file=file,
+                output_dir=self.fanmod_output_root_path + dataset_folder,
+                cache_dir=self.fanmod_cache_root_path + dataset_folder,
+                force_run_fanmod=False,
+                raw_data_folder=self.network_dataset_root_path + dataset_folder,
+                force_parse=force_parse,
+                enable_parse=True,
+                p_value=p_value,
+                quantile_threshold=quantile_threshold) for file in tqdm(files))
 
             motifs_dataset = pd.concat(result_list, ignore_index=True)
             motifs_dataset['FOV'] = motifs_dataset['FOV'].astype('category')
@@ -105,7 +104,8 @@ class CISM:
             motifs_dataset['Patient_uId'] = motifs_dataset['Patient_uId'].astype('category')
             motifs_dataset['FOV'] = motifs_dataset['FOV'].astype('category')
 
-        self.motifs_dataset = motifs_dataset if self.motifs_dataset is None else pd.concat([self.motifs_dataset, motifs_dataset])
+        self.motifs_dataset = motifs_dataset if self.motifs_dataset is None else pd.concat(
+            [self.motifs_dataset, motifs_dataset])
         self.motifs_dataset.reset_index(drop=True)
 
     def motif_dataset(self) -> pd.DataFrame:
@@ -135,7 +135,8 @@ class CISM:
 class AnalyzeMotifsResult:
     def __init__(self, analyze_results: list, patients_ids: list, labels: list):
         self.results = pd.DataFrame(analyze_results,
-                                    columns=['TP', 'TN', 'FN', 'FP', 'cFeatures', 'prob', 'class', 'pred_class', 'classes', 'contributions', 'shape_values'],
+                                    columns=['TP', 'TN', 'FN', 'FP', 'cFeatures', 'prob', 'class', 'pred_class',
+                                             'classes', 'contributions', 'shape_values'],
                                     index=patients_ids)
         self.labels = labels
 
@@ -197,6 +198,7 @@ class FeatureConfiguration:
         # but we can change that in the future
         if len(labels) != 2:
             raise Exception("currently, we support only binary classification")
+
 
 class HardDiscriminativeFC(FeatureConfiguration):
     def __init__(self,
@@ -503,14 +505,14 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
                                                         tissue_state_func=tissue_state_func)
         self.common_cells = common_cells_type
 
-    def get_patients_class(self, classes: list=None) -> pd.DataFrame:
+    def get_patients_class(self, classes: list = None) -> pd.DataFrame:
         if classes is None:
             classes = self.patient_class_df.patient_class.unique()
         exist_patients = self.cism.motifs_dataset.Patient_uId.unique()
         return self.patient_class_df[self.patient_class_df.patient_class.isin(classes) &
                                      self.patient_class_df.index.isin(exist_patients)]
 
-    def discover(self, extract_by: DiscriminativeFeatureKey, classes: list=None):
+    def discover(self, extract_by: DiscriminativeFeatureKey, classes: list = None):
         patient_class_dict = self.patient_class_df[DiscriminativeMotifs.PATIENT_CLASS].to_dict()
         self.cism.motifs_dataset[DiscriminativeMotifs.PATIENT_CLASS] = self.cism.motifs_dataset.Patient_uId.transform(
             lambda row: patient_class_dict[row]).astype('category')
@@ -584,17 +586,17 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
 
         raw_get_features_result = Parallel(n_jobs=n_jobs, verbose=0, prefer='threads')(
             delayed(self._get_features)(
-                                    x_data=__get_motif_dataset_of_patient(self.cism.motifs_dataset,
-                                                                              unique_patients_ids,
-                                                                              trial_i,
-                                                                              True),
-                                    x_test=__get_motif_dataset_of_patient(self.cism.motifs_dataset,
-                                                                          unique_patients_ids,
-                                                                          trial_i,
-                                                                          False),
-                                    test_patient_uid=unique_patients_ids[trial_i],
-                                    feature_conf=feature_conf,
-                                    patient_class_df=local_patient_class) for trial_i in tqdm(range(len(unique_patients_ids))))
+                x_data=__get_motif_dataset_of_patient(self.cism.motifs_dataset,
+                                                      unique_patients_ids,
+                                                      trial_i,
+                                                      True),
+                x_test=__get_motif_dataset_of_patient(self.cism.motifs_dataset,
+                                                      unique_patients_ids,
+                                                      trial_i,
+                                                      False),
+                test_patient_uid=unique_patients_ids[trial_i],
+                feature_conf=feature_conf,
+                patient_class_df=local_patient_class) for trial_i in tqdm(range(len(unique_patients_ids))))
 
         records = [{'test_patient_id': test_patient_id,
                     'features': features} for test_patient_id, features, _ in raw_get_features_result]
@@ -606,10 +608,11 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
 
         return records
 
-    def analyze_motifs(self, feature_conf: FeatureConfiguration, exclude_patients: list, **kwargs) -> AnalyzeMotifsResult:
+    def analyze_motifs(self, feature_conf: FeatureConfiguration, exclude_patients: list,
+                       **kwargs) -> AnalyzeMotifsResult:
         n_jobs = kwargs.setdefault("n_jobs", 8)
         prefer = kwargs.setdefault("prefer", 'processes')
-        random_state = kwargs.setdefault("random_state",  np.random.RandomState())
+        random_state = kwargs.setdefault("random_state", np.random.RandomState())
         rand_patient_class = kwargs.setdefault("rand_patient_class", False)
         rand_motifs = kwargs.setdefault("rand_motifs", False)
 
@@ -619,7 +622,8 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
         for patient_id in exclude_patients:
             unique_patients_ids = np.delete(unique_patients_ids, np.where(np.array(unique_patients_ids) == patient_id))
 
-        local_patient_class = self.patient_class_df[self.patient_class_df.patient_class.isin(feature_conf.labels)].copy()
+        local_patient_class = self.patient_class_df[
+            self.patient_class_df.patient_class.isin(feature_conf.labels)].copy()
 
         if rand_patient_class:
             local_patient_class[DiscriminativeMotifs.PATIENT_CLASS] = random_state.permutation(
@@ -657,7 +661,8 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
                                     test_patient_uid=unique_patients_ids[trial_i],
                                     feature_conf=feature_conf,
                                     random_state=random_state,
-                                    patient_class_df=local_patient_class) for trial_i in tqdm(range(len(unique_patients_ids))))
+                                    patient_class_df=local_patient_class) for trial_i in
+            tqdm(range(len(unique_patients_ids))))
 
         return AnalyzeMotifsResult(analyze_results=raw_analyze_result,
                                    patients_ids=unique_patients_ids,
@@ -691,12 +696,12 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
                                                                               unique_patients_ids,
                                                                               trial_i,
                                                                               True),
-                                    x_test=__get_motif_dataset_of_patient(self.cism.motifs_dataset,
-                                                                          unique_patients_ids,
-                                                                          trial_i,
-                                                                          False),
-                                    test_patient_uid=unique_patients_ids[trial_i],
-                                    feature_conf=feature_conf) for trial_i in tqdm(range(len(unique_patients_ids))))
+                                        x_test=__get_motif_dataset_of_patient(self.cism.motifs_dataset,
+                                                                              unique_patients_ids,
+                                                                              trial_i,
+                                                                              False),
+                                        test_patient_uid=unique_patients_ids[trial_i],
+                                        feature_conf=feature_conf) for trial_i in tqdm(range(len(unique_patients_ids))))
 
         records = [{'test_patient_id': test_patient_id,
                     'features': features} for test_patient_id, features, _ in raw_get_features_result]
@@ -705,6 +710,7 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
 
     @staticmethod
     def _load_tissue_state(tissue_state_csv_path: str, tissue_state_to_string: Dict[int, str], tissue_state_func=None) -> pd.DataFrame:
+
         patient_class_df = pd.read_csv(tissue_state_csv_path, index_col=0, names=['patient_class_id'])
 
         if tissue_state_func:
@@ -750,21 +756,26 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
                               .groupby(discriminative_feature_key, observed=True)[discriminative_group_key]
                               .nunique().reset_index())
         one_class_data = (df_copy[df_copy[discriminative_feature_key]
-                          .isin(special_hash_group[special_hash_group[discriminative_group_key] == 1][discriminative_feature_key])
+                          .isin(
+            special_hash_group[special_hash_group[discriminative_group_key] == 1][discriminative_feature_key])
                                   & (df_copy.nunique_colors >= min_nunique_colors)].copy())
 
-        one_class_data.loc[:, DiscriminativeMotifs.PATIENT_COUNT_KEY] = one_class_data.groupby(discriminative_feature_key, observed=True)['Patient_uId'].transform('nunique')
+        one_class_data.loc[:, DiscriminativeMotifs.PATIENT_COUNT_KEY] = \
+        one_class_data.groupby(discriminative_feature_key, observed=True)['Patient_uId'].transform('nunique')
         one_class_num_motifs = (one_class_data[(one_class_data[DiscriminativeMotifs.PATIENT_COUNT_KEY] > min_patients)]
-                                .sort_values('Freq', ascending=False).drop_duplicates(subset=[discriminative_feature_key]).shape[0])
+        .sort_values('Freq', ascending=False).drop_duplicates(subset=[discriminative_feature_key]).shape[0])
 
         unique_classes = df_copy.groupby(discriminative_group_key, observed=True).Patient_uId.nunique()
         for class_index in range(len(unique_classes.index)):
             class_name = unique_classes.index[class_index]
-            one_class_data.loc[one_class_data[discriminative_group_key] == class_name, DiscriminativeMotifs.PATIENT_PERCENTAGE_KEY] = (
-                    one_class_data.loc[one_class_data[discriminative_group_key] == class_name, DiscriminativeMotifs.PATIENT_COUNT_KEY] /
+            one_class_data.loc[
+                one_class_data[discriminative_group_key] == class_name, DiscriminativeMotifs.PATIENT_PERCENTAGE_KEY] = (
+                    one_class_data.loc[one_class_data[
+                                           discriminative_group_key] == class_name, DiscriminativeMotifs.PATIENT_COUNT_KEY] /
                     unique_classes[class_name])
 
-        return one_class_data[(one_class_data[DiscriminativeMotifs.PATIENT_COUNT_KEY] >= min_patients)], one_class_num_motifs
+        return one_class_data[
+            (one_class_data[DiscriminativeMotifs.PATIENT_COUNT_KEY] >= min_patients)], one_class_num_motifs
 
     @staticmethod
     def _sort_features_single(data: pd.DataFrame, motif_ids, labels: list) -> list:
@@ -786,10 +797,10 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
             group_b_size = group_b.Patient.nunique()
 
             results.append(pd.DataFrame([{'ID': motif_id,
-                             'wasserstein_distance': wd_score,
-                             'group_a_size': group_a_size,
-                             'group_b_size': group_b_size,
-                             'group_size_max': max(group_a_size, group_b_size)}]))
+                                          'wasserstein_distance': wd_score,
+                                          'group_a_size': group_a_size,
+                                          'group_b_size': group_b_size,
+                                          'group_size_max': max(group_a_size, group_b_size)}]))
 
         return results
 
@@ -798,7 +809,8 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
         wd_results = []
         wd_results = Parallel(n_jobs=n_jobs, prefer='processes', return_as="generator")(
             delayed(TissueStateDiscriminativeMotifs._sort_features_single)(
-                data=data[data.ID.isin(motif_ids)][['ID', 'Freq', DiscriminativeMotifs.PATIENT_CLASS, 'Patient']].copy(),
+                data=data[data.ID.isin(motif_ids)][
+                    ['ID', 'Freq', DiscriminativeMotifs.PATIENT_CLASS, 'Patient']].copy(),
                 motif_ids=motif_ids,
                 labels=labels) for motif_ids in np.array_split(data.ID.unique(), n_jobs))
 
@@ -820,7 +832,8 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
 
         if isinstance(feature_conf, SoftDiscriminativeFC):
             sort_by = 'wasserstein_distance'
-            wd_results = TissueStateDiscriminativeMotifs._sort_features(data=one_class_data_filter, labels=feature_conf.labels)
+            wd_results = TissueStateDiscriminativeMotifs._sort_features(data=one_class_data_filter,
+                                                                        labels=feature_conf.labels)
             one_class_data_filter = pd.merge(one_class_data_filter, wd_results, on='ID')
             one_class_data_filter = one_class_data_filter[one_class_data_filter['wasserstein_distance'] >= 0.05]
             one_class_data_filter = one_class_data_filter.sort_values(by=sort_by, ascending=False)
@@ -882,11 +895,11 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
         return unique_motifs_colors, unique_motifs, c_features
 
     def _get_features(self,
-                  x_data: pd.DataFrame,
-                  x_test: pd.DataFrame,
-                  test_patient_uid: str,
-                  feature_conf: FeatureConfiguration,
-                  patient_class_df: pd.DataFrame = None):
+                      x_data: pd.DataFrame,
+                      x_test: pd.DataFrame,
+                      test_patient_uid: str,
+                      feature_conf: FeatureConfiguration,
+                      patient_class_df: pd.DataFrame = None):
 
         local_patient_class = self.patient_class_df.copy() if patient_class_df is None else patient_class_df.copy()
 
@@ -900,31 +913,32 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
                   .astype({DiscriminativeMotifs.PATIENT_CLASS: 'category'}))
 
         if isinstance(feature_conf, TopNFC):
-            unique_motifs = x_data.groupby('ID', observed=True)['Freq'].mean().reset_index().sort_values('Freq', ascending=False).head(
+            unique_motifs = x_data.groupby('ID', observed=True)['Freq'].mean().reset_index().sort_values('Freq',
+                                                                                                         ascending=False).head(
                 feature_conf.top_n).ID.tolist()
             unique_motifs_colors = []
             c_features = len(unique_motifs_colors) + len(unique_motifs)
         elif isinstance(feature_conf, HardDiscriminativeFC):
             one_class_data, _ = self._extract_discriminative(
-                                    x_data=x_data,
-                                    discriminative_group_key=DiscriminativeMotifs.PATIENT_CLASS,
-                                    discriminative_feature_key=feature_conf.extract_by.value,
-                                    common_cell_type=list(self.common_cells.keys()),
-                                    min_nunique_colors=1,
-                                    min_patients=1,
-                                    p_value=0.05)
+                x_data=x_data,
+                discriminative_group_key=DiscriminativeMotifs.PATIENT_CLASS,
+                discriminative_feature_key=feature_conf.extract_by.value,
+                common_cell_type=list(self.common_cells.keys()),
+                min_nunique_colors=1,
+                min_patients=1,
+                p_value=0.05)
             unique_motifs_colors, unique_motifs, c_features = self._extract_features(one_class_data=one_class_data,
                                                                                      feature_conf=feature_conf)
         elif isinstance(feature_conf, SoftDiscriminativeFC):
             unique_classes = x_data.groupby(DiscriminativeMotifs.PATIENT_CLASS, observed=True).Patient_uId.nunique()
 
             count_by_id = (x_data.groupby(['ID', DiscriminativeMotifs.PATIENT_CLASS], observed=True)['Patient_uId']
-                                                                     .agg('nunique').reset_index())
+                           .agg('nunique').reset_index())
 
             count_by_id = pd.merge(count_by_id,
                                    unique_classes.reset_index().rename({'Patient_uId': 'group_number'}, axis=1),
                                    left_on='patient_class', right_on='patient_class')
-            count_by_id['Patient_uId'] = count_by_id['Patient_uId']/count_by_id['group_number']
+            count_by_id['Patient_uId'] = count_by_id['Patient_uId'] / count_by_id['group_number']
             count_by_id = (count_by_id.groupby('ID', observed=True)['Patient_uId'].agg('max')
                            .reset_index().rename({'Patient_uId': DiscriminativeMotifs.PATIENT_PERCENTAGE_KEY}, axis=1))
 
@@ -957,21 +971,23 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
 
         patient_class_dict = local_patient_class[DiscriminativeMotifs.PATIENT_CLASS].to_dict()
         patient_class_df = pd.DataFrame.from_dict(patient_class_dict,
-                                                 orient='index',
-                                                 columns=[DiscriminativeMotifs.PATIENT_CLASS])
+                                                  orient='index',
+                                                  columns=[DiscriminativeMotifs.PATIENT_CLASS])
         x_data = (pd.merge(x_data.drop([DiscriminativeMotifs.PATIENT_CLASS], axis=1, errors='ignore'),
-                          patient_class_df,
-                          left_on='Patient_uId', right_index=True)
-                  .astype({DiscriminativeMotifs.PATIENT_CLASS:'category'}))
+                           patient_class_df,
+                           left_on='Patient_uId', right_index=True)
+                  .astype({DiscriminativeMotifs.PATIENT_CLASS: 'category'}))
 
-        if (feature_conf.cell_type_composition_patient_map is not None) and (feature_conf.motifs_patient_map is not None):
+        if (feature_conf.cell_type_composition_patient_map is not None) and (
+                feature_conf.motifs_patient_map is not None):
 
             unique_motifs_colors = feature_conf.cell_type_composition_patient_map[test_patient_uid]
             unique_motifs = feature_conf.motifs_patient_map[test_patient_uid]
             c_features = len(unique_motifs_colors) + len(unique_motifs)
 
         elif isinstance(feature_conf, TopNFC):
-            unique_motifs = x_data.groupby('ID', observed=True)['Freq'].mean().reset_index().sort_values('Freq', ascending=False).head(
+            unique_motifs = x_data.groupby('ID', observed=True)['Freq'].mean().reset_index().sort_values('Freq',
+                                                                                                         ascending=False).head(
                 feature_conf.top_n).ID.tolist()
             unique_motifs_colors = []
             c_features = len(unique_motifs_colors) + len(unique_motifs)
@@ -1034,9 +1050,11 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
         one_class_data_index = one_class_data.set_index(['Patient_uId', 'ID'])
         one_class_data_index.sort_index(inplace=True)
         for patient_class in patient_classes:
-            for patient_uId in one_class_data[one_class_data[DiscriminativeMotifs.PATIENT_CLASS] == patient_class]['Patient_uId'].unique():
+            for patient_uId in one_class_data[one_class_data[DiscriminativeMotifs.PATIENT_CLASS] == patient_class][
+                'Patient_uId'].unique():
                 vector_dict = defaultdict()
-                self._add_cell_type_composition_freq_feature(one_class_data_color_index, unique_motifs_colors, vector_dict, patient_uId)
+                self._add_cell_type_composition_freq_feature(one_class_data_color_index, unique_motifs_colors,
+                                                             vector_dict, patient_uId)
                 self._add_motif_freq_feature(one_class_data_index,
                                              unique_motifs,
                                              vector_dict,
@@ -1059,7 +1077,8 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
         vector_dict = defaultdict()
         x_test_color_index = x_test.set_index(['Patient_uId', 'colors_vec_hash'])
         x_test_color_index.sort_index(inplace=True)
-        self._add_cell_type_composition_freq_feature(x_test_color_index, unique_motifs_colors, vector_dict, test_patient_uid)
+        self._add_cell_type_composition_freq_feature(x_test_color_index, unique_motifs_colors, vector_dict,
+                                                     test_patient_uid)
         x_test_index = x_test.set_index(['Patient_uId', 'ID'])
         x_test_index.sort_index(inplace=True)
         self._add_motif_freq_feature(x_test_index,
@@ -1124,8 +1143,8 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
                 # here we calculate the probability of getting the cell identity composition
                 total_count = one_class_data.loc[(patient_uId, motif_color_id)].Count.sum()
                 total_sub_graphs = (one_class_data.loc[(patient_uId, motif_color_id)].drop_duplicates('FOV')
-                                   .apply(lambda row: row['Count']/row['Freq'], axis=1).sum())
-                feature_set[motif_color_id] = total_count/total_sub_graphs
+                                    .apply(lambda row: row['Count'] / row['Freq'], axis=1).sum())
+                feature_set[motif_color_id] = total_count / total_sub_graphs
             else:
                 feature_set[motif_color_id] = 0
 
@@ -1160,8 +1179,10 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
                                 patient_uId: str,
                                 fuzzy_match_map: dict):
         for motif_id in unique_motifs:
-            if (len(fuzzy_match_map) > 0) and (patient_uId, one_class_data_index.index.get_level_values('ID').isin(fuzzy_match_map[motif_id])) in one_class_data_index.index:
-                filter_data = one_class_data_index.loc[[(patient_uId, one_class_data_index.index.get_level_values('ID').isin(fuzzy_match_map[motif_id]))]]
+            if (len(fuzzy_match_map) > 0) and (patient_uId, one_class_data_index.index.get_level_values('ID').isin(
+                    fuzzy_match_map[motif_id])) in one_class_data_index.index:
+                filter_data = one_class_data_index.loc[
+                    [(patient_uId, one_class_data_index.index.get_level_values('ID').isin(fuzzy_match_map[motif_id]))]]
             elif (len(fuzzy_match_map) == 0) and (patient_uId, motif_id) in one_class_data_index.index:
                 filter_data = one_class_data_index.loc[[(patient_uId, motif_id)]]
             else:
@@ -1172,4 +1193,3 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
             total_sub_graphs = (
                 filter_data.drop_duplicates('FOV').apply(lambda row: row['Count'] / row['Freq'], axis=1).sum())
             feature_set[motif_id] = total_count / total_sub_graphs
-

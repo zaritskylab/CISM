@@ -1,8 +1,5 @@
-import enum
 import itertools
-
 import numpy as np
-import networkx as nx
 import pandas as pd
 import shap
 from sklearn.ensemble import RandomForestClassifier
@@ -80,7 +77,6 @@ class PairwiseAnalysis:
             result = pd.concat([df, result])
 
         return result
-
 
     def analyze(self,
                 full_graph_df: pd.DataFrame,
