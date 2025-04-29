@@ -1,4 +1,5 @@
 import typing
+from typing import List, Dict
 from collections import Counter, defaultdict
 
 import matplotlib.pyplot as plt
@@ -115,7 +116,7 @@ class CISM:
         """
         return self.motifs_dataset
 
-    def get_patients_ids(self, classes: list) -> list[str]:
+    def get_patients_ids(self, classes: list) -> List[str]:
         if classes is None:
             classes = self.motifs_dataset[DiscriminativeMotifs.PATIENT_CLASS].unique()
 
@@ -184,8 +185,8 @@ class FeatureConfiguration:
                  fuzzy_match: bool = False,
                  top_n_similar: int = 0,
                  fuzzy_match_exclude_original: bool = False,
-                 cell_type_composition_patient_map: dict[str, list] = None,
-                 motifs_patient_map: dict[str, list] = None):
+                 cell_type_composition_patient_map: Dict[str, List] = None,
+                 motifs_patient_map: Dict[str, List] = None):
         self.labels = labels
         self.fuzzy_match = fuzzy_match
         self.top_n_similar = top_n_similar
@@ -210,8 +211,8 @@ class HardDiscriminativeFC(FeatureConfiguration):
                  fuzzy_match: bool = False,
                  top_n_similar: int = 0,
                  fuzzy_match_exclude_original: bool = False,
-                 cell_type_composition_patient_map: dict[str, list] = None,
-                 motifs_patient_map: dict[str, list] = None):
+                 cell_type_composition_patient_map: Dict[str, List] = None,
+                 motifs_patient_map: Dict[str, List] = None):
         super(HardDiscriminativeFC, self).__init__(labels,
                                                    fuzzy_match,
                                                    top_n_similar,
@@ -267,8 +268,8 @@ class SoftDiscriminativeFC(FeatureConfiguration):
                  fuzzy_match: bool = False,
                  top_n_similar: int = 0,
                  fuzzy_match_exclude_original: bool = False,
-                 cell_type_composition_patient_map: dict[str, list] = None,
-                 motifs_patient_map: dict[str, list] = None):
+                 cell_type_composition_patient_map: Dict[str, List] = None,
+                 motifs_patient_map: Dict[str, List] = None):
         super(SoftDiscriminativeFC, self).__init__(labels=labels,
                                                    fuzzy_match=fuzzy_match,
                                                    top_n_similar=top_n_similar,
@@ -321,8 +322,8 @@ class TopNFC(FeatureConfiguration):
     def __init__(self,
                  labels: list,
                  top_n: int,
-                 cell_type_composition_patient_map: dict[str, list] = None,
-                 motifs_patient_map: dict[str, list] = None):
+                 cell_type_composition_patient_map: Dict[str, List] = None,
+                 motifs_patient_map: Dict[str, List] = None):
         super(TopNFC, self).__init__(labels=labels,
                                      cell_type_composition_patient_map=cell_type_composition_patient_map,
                                      motifs_patient_map=motifs_patient_map)
@@ -333,8 +334,8 @@ class InferenceFC(FeatureConfiguration):
     def __init__(self,
                  labels: list,
                  motifs_ids: list,
-                 cell_type_composition_patient_map: dict[str, list] = None,
-                 motifs_patient_map: dict[str, list] = None):
+                 cell_type_composition_patient_map: Dict[str, List] = None,
+                 motifs_patient_map: Dict[str, List] = None):
         super(InferenceFC, self).__init__(labels=labels,
                                           cell_type_composition_patient_map=cell_type_composition_patient_map,
                                           motifs_patient_map=motifs_patient_map)
@@ -494,8 +495,8 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
     def __init__(self,
                  cism: CISM,
                  tissue_state_csv_path: str,
-                 tissue_state_to_string: dict[int, str],
-                 common_cells_type: dict[int, str],
+                 tissue_state_to_string: Dict[int, List],
+                 common_cells_type: Dict[int, str],
                  tissue_state_func=None):
         self.cism = cism
         self._add_cell_identity_feature(data=self.cism.motifs_dataset, common_cell_type=common_cells_type)
@@ -708,8 +709,8 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
         return pd.DataFrame.from_records(records)
 
     @staticmethod
-    def _load_tissue_state(tissue_state_csv_path: str, tissue_state_to_string: dict[int, str],
-                           tissue_state_func=None) -> pd.DataFrame:
+    def _load_tissue_state(tissue_state_csv_path: str, tissue_state_to_string: Dict[int, str], tissue_state_func=None) -> pd.DataFrame:
+
         patient_class_df = pd.read_csv(tissue_state_csv_path, index_col=0, names=['patient_class_id'])
 
         if tissue_state_func:
@@ -1115,7 +1116,7 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
                 (shap_values, instance))
 
     @staticmethod
-    def _add_cell_identity_feature(data: pd.DataFrame, common_cell_type: dict[int, str]):
+    def _add_cell_identity_feature(data: pd.DataFrame, common_cell_type: Dict[int, str]):
         from cism import helpers
 
         # create color vec and color vec hash columns

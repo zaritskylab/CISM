@@ -1,6 +1,7 @@
 import base64
 import pickle
 from pathlib import Path
+import shlex
 
 import subprocess
 import pandas as pd
@@ -45,7 +46,7 @@ def run_fanmod(
     try:
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         print(f"{FANMOD_path}/{FANMOD_exe} -i {raw_data_folder}/{file} -o {output_dir}/{patient_num}.csv -r {iterations} -s {motif_size} --colored_vertcies")
-        process = subprocess.Popen(f"{FANMOD_path}/{FANMOD_exe} -i {raw_data_folder}/{file} -o {output_dir}/{patient_num}.csv -r {iterations} -s {motif_size} --colored_vertcies -d")
+        process = subprocess.Popen(shlex.split(f"{FANMOD_path}/{FANMOD_exe} -i {raw_data_folder}/{file} -o {output_dir}/{patient_num}.csv -r {iterations} -s {motif_size} --colored_vertcies -d"))
         process.communicate()
         if process.returncode != 0:
             raise Exception("error occurs while trying to run fanmod+")
@@ -223,7 +224,7 @@ def analyze_file(
 
     pathlib.Path(output_dir + '/' + str(motif_size) + '/').mkdir(exist_ok=True, parents=True)
     result_file = output_dir + '/' + str(motif_size) + '/' + patient_num + '_' + fov + '.csv'
-    if not pathlib.Path(result_file).exists() or force_run_fanmod:
+    if not pathlib.Path(result_file).exists() or force_run_fanmod or pathlib.Path(result_file).stat().st_size < 2048:
         if not run_fanmod(FANMOD_exe=FANMOD_exe,
                           FANMOD_path=FANMOD_path,
                           iterations=iterations,
