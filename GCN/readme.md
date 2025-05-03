@@ -130,7 +130,7 @@ dataset = CellGraphDataset(
     max_distance=100,  # Maximum distance for edge creation
     cells_to_filter=['tumor'],  # Cell types to exclude
     alpha=0.01,  # Alpha parameter for boundary tightness
-    buffer_value=0  # Buffer for inflation/deflation
+    buffer_value=0  
 )
 
 # Preprocess and save the dataset
