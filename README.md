@@ -20,7 +20,7 @@ CISM is a two-step method to identify local interconnected cell structures assoc
 3. python3 -m pip install requests
 
 ### Prepare dataset for analysis
-In order to analyze the proteomics data, we need to convert patients field of view (FOV) to a graph and stores the graphs into a folder.
+In order to analyze the proteomics data, we need to convert the patient's field of view (FOV) to a graph and store the graphs in a folder.
 Folder structure (with 1..n patients and 1..f field-of-view):
 - data
   - Dataset Name
@@ -49,7 +49,7 @@ with nodes colors:
     color[1] = 1
     color[2] = 2
 
-The matrix should be represented as colord edge list:
+The matrix should be represented as a colord edge list:
 
     0 1 0 1
     1 0 1 0
@@ -70,7 +70,7 @@ For example:
     TNBC1, POSITIVE
     TNBC2, NEGATIVE
 
-or when the class is continues value of survival days:
+or when the class is a continuous value of survival days:
 
     TNBC1, 2612
     TNBC2, 3822
