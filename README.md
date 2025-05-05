@@ -18,6 +18,7 @@ CISM is a two-step method to identify local interconnected cell structures assoc
 1. python3 -m venv venv
 2. activate venv (windows: venv\Scripts\activate, linux:source venv/bin/activate)
 3. python3 -m pip install requests
+4. python3 -m pip install -r requirement.txt
 
 ### Prepare dataset for analysis
 In order to analyze the proteomics data, we need to convert the patient's field of view (FOV) to a graph and store the graphs in a folder.
@@ -76,7 +77,7 @@ or when the class is a continuous value of survival days:
     TNBC2, 3822
 
 ### Find discriminative motifs in nutshell
-##### TL;DR For more comprehensive explanation please refer to TNBC notebook demo under the demo folder [Notebook](./analysis/Tutorial/mibitof_tnbc_tutorial.ipynb)
+##### TL;DR For more comprehensive explanation please refer to TNBC notebook Tutrial under anlysis folder [Notebook](./analysis/Tutorial/mibitof_tnbc_tutorial.ipynb)
 
 #### Initiate CISM class with the configuration:
 
