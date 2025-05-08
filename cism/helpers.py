@@ -5,7 +5,6 @@ import shlex
 
 from tqdm.autonotebook import tqdm
 import subprocess
-#import modin.pandas as pd
 import pandas as pd
 import networkx as nx
 import os
@@ -27,14 +26,17 @@ def create_weight_matrix_from_motifs(discriminator,
             if motif_id not in motifs_ids:
                 continue
             print(f'motif_id: {motif_id}, hash_id: {hash_id}')
-            target_motif = discriminator.cism.motifs_dataset[discriminator.cism.motifs_dataset.ID == motif_id].iloc[0].motif
+            target_motif = discriminator.cism.motifs_dataset[discriminator.cism.motifs_dataset.ID == motif_id].iloc[
+                0].motif
             target_motif = string_base64_pickle(target_motif)
             for edge in nx.Graph(target_motif).edges():
                 left_node = target_motif.nodes[edge[0]]['type']
                 right_node = target_motif.nodes[edge[1]]['type']
-                pairwise_cell_types_count_matrix.loc[cells_type[int(left_node)], cells_type[int(right_node)]] += motifs_weight.loc[motif_id]
+                pairwise_cell_types_count_matrix.loc[cells_type[int(left_node)], cells_type[int(right_node)]] += \
+                motifs_weight.loc[motif_id]
 
-    return pairwise_cell_types_count_matrix/np.matrix(pairwise_cell_types_count_matrix).sum()
+    return pairwise_cell_types_count_matrix / np.matrix(pairwise_cell_types_count_matrix).sum()
+
 
 def run_fanmod(
         FANMOD_exe: str,
@@ -47,8 +49,10 @@ def run_fanmod(
         patient_num: str) -> bool:
     try:
         Path(output_dir).mkdir(parents=True, exist_ok=True)
-        print(f"{FANMOD_path}/{FANMOD_exe} -i {raw_data_folder}/{file} -o {output_dir}/{patient_num}.csv -r {iterations} -s {motif_size} --colored_vertcies")
-        process = subprocess.Popen(shlex.split(f"{FANMOD_path}/{FANMOD_exe} -i {raw_data_folder}/{file} -o {output_dir}/{patient_num}.csv -r {iterations} -s {motif_size} --colored_vertcies -d"))
+        print(
+            f"{FANMOD_path}/{FANMOD_exe} -i {raw_data_folder}/{file} -o {output_dir}/{patient_num}.csv -r {iterations} -s {motif_size} --colored_vertcies")
+        process = subprocess.Popen(shlex.split(
+            f"{FANMOD_path}/{FANMOD_exe} -i {raw_data_folder}/{file} -o {output_dir}/{patient_num}.csv -r {iterations} -s {motif_size} --colored_vertcies -d"))
         process.communicate()
         if process.returncode != 0:
             raise Exception("error occurs while trying to run fanmod+")
@@ -101,7 +105,7 @@ def parse_leda(lines: [str]) -> nx.Graph:
         try:
             s, t, reversal, label = next(lines).split()
         except BaseException as err:
-            raise Exception(f"Too few fields in LEDA.GRAPH edge {i+1}") from err
+            raise Exception(f"Too few fields in LEDA.GRAPH edge {i + 1}") from err
 
         # if reversal edge and directed then handle
         if bool(reversal) and du == -1:
@@ -188,7 +192,7 @@ def parse_csv(filepath: str, patient_num: int, fov: str) -> pd.DataFrame:
         'p_value': p_value_list,
         'hash': hash_list,
         'motif': motif_list})],
-        ignore_index=True)
+                   ignore_index=True)
 
     return df
 
@@ -202,19 +206,19 @@ def string_base64_pickle(obj):
 
 
 def analyze_file(
-                 FANMOD_exe: str,
-                 FANMOD_path: str,
-                 iterations: str,
-                 motif_size: int,
-                 file: str,
-                 output_dir: str,
-                 cache_dir: str,
-                 force_run_fanmod: bool,
-                 raw_data_folder: str,
-                 force_parse: bool,
-                 enable_parse: bool,
-                 p_value: float = 0.05,
-                 quantile_threshold: float = 0.9) -> pd.DataFrame:
+        FANMOD_exe: str,
+        FANMOD_path: str,
+        iterations: str,
+        motif_size: int,
+        file: str,
+        output_dir: str,
+        cache_dir: str,
+        force_run_fanmod: bool,
+        raw_data_folder: str,
+        force_parse: bool,
+        enable_parse: bool,
+        p_value: float = 0.05,
+        quantile_threshold: float = 0.9) -> pd.DataFrame:
     import re
     import pathlib
 

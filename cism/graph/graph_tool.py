@@ -39,6 +39,7 @@ def enumerate_all_size_k_subgraphs(graph, k):
     The algorith is called ``ESU`` in Wernicke (2006).
     """
     assert all(isinstance(node, int) for node in graph.nodes())
+
     if not 1 <= k <= len(graph):
         return []
 

@@ -2,7 +2,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 from sklearn.metrics import precision_recall_curve, auc
-from sklearn.metrics import roc_curve, roc_auc_score
+from sklearn.metrics import roc_curve
 
 
 def get_metrics(df: pd.DataFrame):
