@@ -1,7 +1,7 @@
 # Context-dependent Identification of Spatial Motifs (CISM)
 
 ### Description
-Python package contains the code and a demo notebook on public dataset MIBITOF-TNBC (Keren, Leeat et al.
+Python package contains the code and **a demo notebook on public dataset MIBITOF-TNBC** (Keren, Leeat et al.
 Cell, Volume 174, Issue 6, 1373 - 1387.e19).)
 
 CISM is a two-step method to identify local interconnected cell structures associated with a disease state in single cell spatial proteomics data.
@@ -77,7 +77,7 @@ or when the class is a continuous value of survival days:
     TNBC2, 3822
 
 ### Find discriminative motifs in nutshell
-##### TL;DR For more comprehensive explanation please refer to TNBC notebook Tutrial under anlysis folder [Notebook](./analysis/Tutorial/mibitof_tnbc_tutorial.ipynb)
+##### TL;DR For more comprehensive explanation please refer to TNBC notebook Tutrial under analysis folder [Notebook](./analysis/Tutorial/mibitof_tnbc_tutorial.ipynb)
 
 #### Initiate CISM class with the configuration:
 
