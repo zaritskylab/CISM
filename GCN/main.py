@@ -1,574 +1,364 @@
-import torch
-import torch.nn.functional as F
-from torch_geometric.nn import GCNConv, SAGEConv, GraphConv, GATv2Conv
-from torch_geometric.nn import global_mean_pool, global_max_pool, global_add_pool
-from torch_geometric.data import Data, Dataset
-from sklearn.model_selection import LeaveOneOut, StratifiedKFold, train_test_split
-from sklearn.metrics import roc_auc_score, precision_recall_curve, auc as pr_auc
-from sklearn.utils import resample
+"""
+GNN patient-level classification
+=================================
+Two-layer GCN with BFS subgraph sampling, multi-seed ensemble,
+and repeated 3-fold stratified cross-validation.
+
+Usage:
+    python train.py
+    python train.py --seeds 10
+"""
+import argparse, os, pickle, random, warnings, time
 import numpy as np
+import torch, torch.nn as nn, torch.nn.functional as F
+from copy import deepcopy
+from collections import defaultdict
+from sklearn.metrics import roc_auc_score
+from sklearn.utils import resample
+from sklearn.model_selection import RepeatedStratifiedKFold
+from torch_geometric.nn import GCNConv, global_mean_pool, global_max_pool
+from torch_geometric.data import Data
+from torch_geometric.loader import DataLoader
+from torch_geometric.utils import subgraph as pyg_subgraph
 from tqdm import tqdm
-import pickle
-import random
-import os
-import json
-import argparse
-from datetime import datetime
-from gnn import Enhanced_GNN
+warnings.filterwarnings('ignore')
 
 
-# Set seeds for reproducibility across all libraries
-def set_seed(seed=123):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)  # For multi-GPU
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-    os.environ['PYTHONHASHSEED'] = str(seed)
+# ── default config ───────────────────────────────────────────
+DEFAULT_CONFIG = {
+    'cache_path': 'graphs_with_meta.pkl',
+    'hidden': 64,
+    'dropout': 0.3,
+    'lr': 0.001,
+    'weight_decay': 5e-4,
+    'epochs': 80,
+    'patience': 15,
+    'sub_size': 900,
+    'n_subs_per_fov': 30,
+    'batch_size': 32,
+}
 
-def train(model, data_dict, train_indices, optimizer, device, class_weights=None):
-    model.train()
-    total_loss = 0
-    
-    # Random shuffle of training indices for better training stability
-    train_indices = random.sample(train_indices, len(train_indices))
-    
-    for idx in train_indices:
-        data = data_dict[idx].to(device)
-        optimizer.zero_grad()
-        
-        # Forward pass
-        out = model(data)
-        
-        # Use weighted loss if class weights are provided
-        if class_weights is not None:
-            weight = class_weights[int(data.y.item())]
-            loss = F.binary_cross_entropy(out, data.y.float().view(-1, 1), 
-                                        weight=torch.tensor([weight]).to(device))
-        else:
-            loss = F.binary_cross_entropy(out, data.y.float().view(-1, 1))
-        
-        # Add L1 regularization to encourage sparsity
-        l1_lambda = 5e-6  # Lower L1 regularization to avoid underfitting
-        l1_norm = sum(p.abs().sum() for p in model.parameters())
-        loss = loss + l1_lambda * l1_norm
-            
-        loss.backward()
-        
-        # Gradient clipping to prevent exploding gradients
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        
-        optimizer.step()
-        total_loss += loss.item()
-    
-    return total_loss / len(train_indices)
 
-def evaluate(model, data_dict, val_indices, device, class_weights=None):
-    model.eval()
-    y_true, y_pred = [], []
-    total_loss = 0
-    
-    with torch.no_grad():
-        for idx in val_indices:
-            data = data_dict[idx].to(device)
-            out = model(data)
-            y_true.append(data.y.cpu().float().view(-1, 1))
-            y_pred.append(out.cpu().float().view(-1, 1))
-            if class_weights is not None:
-                weight = class_weights[int(data.y.item())]
-                loss = F.binary_cross_entropy(out, data.y.float().view(-1, 1), 
-                                             weight=torch.tensor([weight]).to(device))
-            else:
-                loss = F.binary_cross_entropy(out, data.y.float().view(-1, 1))
-            total_loss += loss.item()
-            
-    y_true = torch.cat(y_true, dim=0).numpy()
-    y_pred = torch.cat(y_pred, dim=0).numpy()
-    val_loss = total_loss / len(val_indices)
-    
-    return val_loss, y_true, y_pred
+# ── helpers ──────────────────────────────────────────────────
+def set_seed(s=42):
+    random.seed(s); np.random.seed(s); torch.manual_seed(s); torch.cuda.manual_seed_all(s)
 
-def train_and_validate(data_dict, model, optimizer, train_idx, val_idx, device, scheduler=None, 
-                       class_weights=None, patience=20, epochs=300, verbose=1):
-    best_val_loss = float('inf')
-    best_val_auc = 0
-    best_model_state = None
-    counter = 0  
-    last_improvement = 0
-    
-    train_losses = []
-    val_losses = []
-    val_aucs = []
-    
-    for epoch in range(1, epochs + 1):
-        # Train the model
-        train_loss = train(model, data_dict, train_idx, optimizer, device, class_weights)
-        train_losses.append(train_loss)
-        
-        # Evaluate on validation set
-        val_loss, y_true, y_pred = evaluate(model, data_dict, val_idx, device, class_weights)
-        val_losses.append(val_loss)
-        
-        # Calculate AUC score for validation
-        if len(np.unique(y_true)) > 1:  # Make sure we have both classes
-            val_auc = roc_auc_score(y_true.flatten(), y_pred.flatten())
-        else:
-            val_auc = 0.5
-        
-        val_aucs.append(val_auc)
-        #if verbose > 0 and (epoch % 20 == 0 or epoch == 1):
-        #    print(f'Epoch {epoch}: Train Loss = {train_loss:.4f}, Val Loss = {val_loss:.4f}, Val AUC = {val_auc:.4f}')
-        
-        if scheduler is not None:
-            if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                scheduler.step(val_loss)
-            else:
-                scheduler.step()
-        if val_auc > best_val_auc:
-            best_val_auc = val_auc
-            best_val_loss = val_loss
-            best_model_state = {
-                'model': model.state_dict(),
-                'epoch': epoch,
-                'optimizer': optimizer.state_dict(),
-                'scheduler': scheduler.state_dict() if scheduler else None
-            }
-            counter = 0  # Reset early stopping counter
-            last_improvement = epoch
-        else:
-            counter += 1
-            
-        # Restart from best model if no improvement for a while
-        if epoch - last_improvement > patience // 2 and epoch < epochs - patience:
-            if verbose > 0:
-                print(f"No improvement for {epoch - last_improvement} epochs, loading best model and reducing LR")
-            model.load_state_dict(best_model_state['model'])
-            # Reduce learning rate
-            for param_group in optimizer.param_groups:
-                param_group['lr'] *= 0.5
-            counter = 0  # Reset counter after loading best model
-        
-        if counter >= patience and epoch > epochs // 2:
-            if verbose > 0:
-                print(f'Early stopping at epoch {epoch}')
-            break
-    
-    # Return training history along with best model
-    return best_model_state, best_val_auc, best_val_loss, {
-        'train_losses': train_losses,
-        'val_losses': val_losses,
-        'val_aucs': val_aucs
-    }
 
-def perform_cross_validation(preprocessed_data, cv_type='kfold', n_folds=3, test_size=0.2, 
-                             val_ratio=0.15, epochs=300, lr=0.002, weight_decay=5e-5, 
-                             hidden_channels=[64, 32, 16], dropout_rate=0.25, conv_type='gcn', 
-                             residual=True, verbose=1, group1='NP', group2='NN'):
-    """
-    Perform cross-validation using either k-fold CV or Leave-One-Out CV
-    
-    Args:
-        preprocessed_data: Dictionary of graph data
-        cv_type: 'kfold' or 'loo' for Leave-One-Out
-        n_folds: Number of folds for k-fold CV (ignored if cv_type='loo')
-        test_size: Test set size for k-fold CV (ignored if cv_type='loo')
-        val_ratio: Validation set size relative to training data
-        epochs: Maximum number of training epochs
-        lr: Learning rate
-        weight_decay: L2 regularization weight
-        hidden_channels: List of hidden layer sizes
-        dropout_rate: Dropout rate
-        conv_type: GNN convolution type ('gcn', 'sage', 'graph', 'gat')
-        residual: Whether to use residual connections
-        verbose: Verbosity level (0, 1, 2)
-        group1, group2: Group labels for data
-        
-    Returns:
-        Dictionary with results
-    """
-    # Create results directory with timestamp
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_dir = f"results_{cv_type}_{timestamp}"
-    os.makedirs(results_dir, exist_ok=True)
-    
-    # Save hyperparameters
-    hyperparams = {
-        'cv_type': cv_type,
-        'n_folds': n_folds if cv_type == 'kfold' else 'N/A',
-        'test_size': test_size if cv_type == 'kfold' else 'N/A',
-        'val_ratio': val_ratio,
-        'epochs': epochs,
-        'lr': lr,
-        'weight_decay': weight_decay,
-        'hidden_channels': hidden_channels,
-        'dropout_rate': dropout_rate,
-        'conv_type': conv_type,
-        'residual': residual
-    }
-    
-    with open(f"{results_dir}/hyperparams.json", 'w') as f:
-        json.dump(hyperparams, f, indent=2)
-    
-    # Set device consistently
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    if verbose > 0:
-        print(f"Using device: {device}")
-    
-    # Extract all data indices and labels
-    data_indices = list(preprocessed_data.keys())
-    ys = [preprocessed_data[i].y.item() for i in data_indices]
-    
-    # Check class balance
-    class_counts = {0: ys.count(0), 1: ys.count(1)}
-    if verbose > 0:
-        print(f"Class distribution: {class_counts}")
-        print(f"Total samples: {len(ys)}")
-    
-    # Calculate class weights for imbalanced data
-    total_samples = len(ys)
-    minority_class = 0 if class_counts[0] < class_counts[1] else 1
-    majority_class = 1 if minority_class == 0 else 0
-    
-    class_weights = {
-        minority_class: (total_samples / (2 * class_counts[minority_class])) * 1.1,  # Boost minority class
-        majority_class: (total_samples / (2 * class_counts[majority_class])) * 0.9   # Reduce majority class
-    }
-    if verbose > 0:
-        print(f"Class weights: {class_weights}")
-    
-    # Storage for predictions and metrics
-    all_y_true = []
-    all_y_pred = []
-    all_indices = []
-    all_fold_aucs = []
-    
-    # Get input dimension
-    input_dim = preprocessed_data[list(preprocessed_data.keys())[0]].x.shape[1]
-    
-    # Set up cross-validation
-    if cv_type == 'loo':
-        # Leave-One-Out CV
-        cv = LeaveOneOut()
-        splits = list(cv.split(data_indices))
-        if verbose > 0:
-            print(f"Starting Leave-One-Out Cross-Validation with {len(splits)} splits")
-    else:
-        # Stratified K-Fold CV
-        cv = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
-        splits = list(cv.split(data_indices, ys))
-        if verbose > 0:
-            print(f"Starting {n_folds}-fold Cross-Validation")
-    
-    # Track best model for final evaluation
-    best_model_state = None
-    best_val_auc = 0
-    
-    # Use tqdm for progress bar if verbose
-    fold_iterator = tqdm(enumerate(splits), total=len(splits), desc=f"{cv_type} Folds") if verbose > 0 else enumerate(splits)
-    
-    # Iterate through folds
-    for fold_idx, (train_val_idx, test_idx) in fold_iterator:
-        # Reset seed for each fold to ensure determinism
-        set_seed(42 + fold_idx)
-        
-        # Get training/validation and test indices
-        if cv_type == 'loo':
-            # For LOO, test is a single sample
-            test_indices = [data_indices[i] for i in test_idx]
-        else:
-            # For k-fold, test is a proportion of data
-            train_val_idx, test_indices_temp = train_test_split(
-                [data_indices[i] for i in train_val_idx],
-                test_size=test_size,
-                stratify=[ys[data_indices.index(i)] for i in [data_indices[j] for j in train_val_idx]],
-                random_state=42 + fold_idx
-            )
-            test_indices = test_indices_temp
-        
-        # Split remaining data into train and validation
-        train_val_ys = [ys[data_indices.index(i)] for i in train_val_idx]
-        
-        # Make sure both classes are represented in validation
-        train_indices, val_indices = train_test_split(
-            [data_indices[i] for i in train_val_idx], 
-            test_size=val_ratio, 
-            stratify=train_val_ys, 
-            random_state=42 + fold_idx
-        )
-        
-        # Create model
-        model = Enhanced_GNN(
-            input_size=input_dim,
-            hidden_channels=hidden_channels,
-            dropout_rate=dropout_rate,
-            conv_type=conv_type,
-            residual=residual
-        ).to(device)
-        
-        # Initialize optimizer
-        optimizer = torch.optim.AdamW(
-            model.parameters(), 
-            lr=lr, 
-            weight_decay=weight_decay
-        )
-        
-        # Learning rate scheduler
-        scheduler = torch.optim.lr_scheduler.OneCycleLR(
-            optimizer,
-            max_lr=lr,
-            total_steps=epochs,
-            pct_start=0.3,
-            anneal_strategy='cos'
-        )
-        
-        # Train and validate
-        fold_best_state, fold_val_auc, _, _ = train_and_validate(
-            preprocessed_data, model, optimizer, train_indices, val_indices, 
-            device, scheduler, class_weights, patience=20, epochs=epochs,
-            verbose=(verbose > 1)  # Only show detailed training progress if verbose > 1
-        )
-        
-        # Keep track of the best model across all folds
-        if fold_val_auc > best_val_auc:
-            best_val_auc = fold_val_auc
-            best_model_state = fold_best_state['model']
-        
-        # Load best model for this fold
-        model.load_state_dict(fold_best_state['model'])
-        
-        # Evaluate on test set
-        _, test_y_true, test_y_pred = evaluate(model, preprocessed_data, test_indices, device)
-        
-        # Calculate fold test AUC
-        if len(np.unique(test_y_true)) > 1:
-            fold_test_auc = roc_auc_score(test_y_true.flatten(), test_y_pred.flatten())
-            all_fold_aucs.append(fold_test_auc)
-        else:
-            fold_test_auc = 0.5  # Default if only one class
-            if verbose > 0:
-                print(f"Warning: Fold {fold_idx+1} test set has only one class, AUC set to 0.5")
-        
-        # Save results for this fold
-        all_y_true.append(test_y_true)
-        all_y_pred.append(test_y_pred)
-        all_indices.extend(test_indices)
-        
-        # Save individual fold predictions
-        fold_result = {
-            'fold': fold_idx,
-            'test_indices': test_indices,
-            'y_true': test_y_true.flatten().tolist(),
-            'y_pred': test_y_pred.flatten().tolist(),
-            'test_auc': float(fold_test_auc),
-            'val_auc': float(fold_val_auc)
-        }
-        
-        with open(f"{results_dir}/fold_{fold_idx}.json", 'w') as f:
-            json.dump(fold_result, f, indent=2)
-        
-        # Report fold progress if verbose
-        if verbose > 0:
-            print(f"Fold {fold_idx+1} AUC: {fold_test_auc:.4f}")
-    
-    # Combine all test predictions and ground truths
-    all_y_true = np.vstack(all_y_true)
-    all_y_pred = np.vstack(all_y_pred)
-    
-    # Calculate overall metrics
-    final_auc = roc_auc_score(all_y_true.flatten(), all_y_pred.flatten())
-    
-    # Calculate PR-AUC
-    precision, recall, _ = precision_recall_curve(all_y_true.flatten(), all_y_pred.flatten())
-    pr_auc_score = pr_auc(recall, precision)
-    
-    if verbose > 0:
-        print(f"\nFinal Cross-Validation Results:")
-        print(f"AUC Score: {final_auc:.4f}")
-        print(f"PR-AUC Score: {pr_auc_score:.4f}")
-        if cv_type == 'kfold':
-            print(f"Fold AUCs: {[f'{auc:.4f}' for auc in all_fold_aucs]}")
-            print(f"Mean Fold AUC: {np.mean(all_fold_aucs):.4f} ± {np.std(all_fold_aucs):.4f}")
-    
-    # Create a final model with the best parameters
-    final_model = Enhanced_GNN(
-        input_size=input_dim,
-        hidden_channels=hidden_channels,
-        dropout_rate=dropout_rate,
-        conv_type=conv_type,
-        residual=residual
-    ).to(device)
-    
-    # Load the best model state
-    final_model.load_state_dict(best_model_state)
-    
-    # Class-specific performance
-    class_0_indices = [i for i, y in enumerate(all_y_true.flatten()) if y == 0]
-    class_1_indices = [i for i, y in enumerate(all_y_true.flatten()) if y == 1]
-    
-    class_0_preds = all_y_pred.flatten()[class_0_indices]
-    class_1_preds = all_y_pred.flatten()[class_1_indices]
-    
-    if verbose > 0:
-        print(f"Class 0 average prediction: {np.mean(class_0_preds):.4f} ± {np.std(class_0_preds):.4f}")
-        print(f"Class 1 average prediction: {np.mean(class_1_preds):.4f} ± {np.std(class_1_preds):.4f}")
-    
-    # Calculate confidence intervals using bootstrapping
-    n_bootstraps = 1000
-    bootstrap_aucs = []
-    
-    for _ in range(n_bootstraps):
-        # Sample with replacement
-        indices = resample(range(len(all_y_true)), replace=True, n_samples=len(all_y_true))
-        bootstrap_y_true = all_y_true[indices]
-        bootstrap_y_pred = all_y_pred[indices]
-        
-        if len(np.unique(bootstrap_y_true)) < 2:
-            # Skip bootstraps that don't have both classes
-            continue
-            
-        bootstrap_auc = roc_auc_score(bootstrap_y_true, bootstrap_y_pred)
-        bootstrap_aucs.append(bootstrap_auc)
-    
-    # Calculate 95% confidence interval
-    bootstrap_aucs.sort()
-    lower_ci = bootstrap_aucs[int(0.025 * len(bootstrap_aucs))]
-    upper_ci = bootstrap_aucs[int(0.975 * len(bootstrap_aucs))]
-    
-    if verbose > 0:
-        print(f"Bootstrap 95% CI for AUC: [{lower_ci:.4f}, {upper_ci:.4f}]")
-    
-    # Save final results
-    final_results = {
-        'cv_type': cv_type,
-        'test_indices': all_indices,
-        'auc': float(final_auc),
-        'pr_auc': float(pr_auc_score),
-        'bootstrap_ci': [float(lower_ci), float(upper_ci)],
-        'class_0_avg': float(np.mean(class_0_preds)),
-        'class_0_std': float(np.std(class_0_preds)),
-        'class_1_avg': float(np.mean(class_1_preds)),
-        'class_1_std': float(np.std(class_1_preds)),
-        'fold_aucs': [float(auc) for auc in all_fold_aucs] if cv_type == 'kfold' else None,
-        'fold_mean_auc': float(np.mean(all_fold_aucs)) if cv_type == 'kfold' else None,
-        'fold_std_auc': float(np.std(all_fold_aucs)) if cv_type == 'kfold' else None,
-        'hyperparams': hyperparams
-    }
-    
-    with open(f"{results_dir}/final_results.json", 'w') as f:
-        json.dump(final_results, f, indent=2)
-    
-    # Save final model
-    torch.save({
-        'model_state_dict': final_model.state_dict(),
-        'input_dim': input_dim,
-        'hyperparams': hyperparams
-    }, f"{results_dir}/best_{cv_type}_model.pt")
-    
-    # Return the results dictionary
+def build_adjacency(data):
+    ei = data.edge_index.cpu().numpy() if data.edge_index.is_cuda else data.edge_index.numpy()
+    adj = defaultdict(list)
+    for s, t in zip(ei[0], ei[1]):
+        adj[s].append(t)
+    return adj
+
+
+def fast_bfs_subgraph(data, adj, size=900):
+    n = data.x.size(0)
+    if n <= size:
+        return Data(x=data.x.clone(), edge_index=data.edge_index.clone(), y=data.y.clone())
+    seed = random.randint(0, n - 1)
+    visited = [seed]; vs = {seed}; head = 0
+    while len(visited) < size and head < len(visited):
+        for nb in adj.get(visited[head], []):
+            if nb not in vs:
+                vs.add(nb); visited.append(nb)
+            if len(visited) >= size:
+                break
+        head += 1
+    if len(visited) < size:
+        rem = [i for i in range(n) if i not in vs]
+        random.shuffle(rem)
+        visited.extend(rem[:size - len(visited)])
+    idx = sorted(visited[:size])
+    idx_t = torch.tensor(idx, dtype=torch.long)
+    mask = torch.zeros(n, dtype=torch.bool); mask[idx_t] = True
+    ei_cpu = data.edge_index.cpu() if data.edge_index.is_cuda else data.edge_index
+    sub_ei, _ = pyg_subgraph(mask, ei_cpu, relabel_nodes=True, num_nodes=n)
+    return Data(x=data.x[idx_t], edge_index=sub_ei, y=data.y)
+
+
+def presample(data_dict, cfg, seed=42):
+    """Pre-sample BFS subgraphs for all FOVs."""
+    random.seed(seed); np.random.seed(seed)
+    adjs = {i: build_adjacency(data_dict[i]) for i in range(len(data_dict))}
     return {
-        'auc': final_auc,
-        'pr_auc': pr_auc_score,
-        'model': final_model,
-        'y_true': all_y_true,
-        'y_pred': all_y_pred,
-        'fold_aucs': all_fold_aucs if cv_type == 'kfold' else None,
-        'results_dir': results_dir
+        i: [fast_bfs_subgraph(data_dict[i], adjs[i], cfg['sub_size'])
+            for _ in range(cfg['n_subs_per_fov'])]
+        for i in range(len(data_dict))
     }
 
-# Command-line argument parsing
+
+# ── model ────────────────────────────────────────────────────
+def _init(mod):
+    for m in mod.modules():
+        if isinstance(m, nn.Linear):
+            nn.init.xavier_uniform_(m.weight, gain=0.5)
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+
+
+class GCN_2hop(nn.Module):
+    """Two-layer GCN with residual connection, BN, dropout, and mean+max pooling."""
+    def __init__(self, in_dim, hidden=64, dropout=0.3):
+        super().__init__()
+        self.c1 = GCNConv(in_dim, hidden)
+        self.c2 = GCNConv(hidden, hidden)
+        self.b1 = nn.BatchNorm1d(hidden)
+        self.b2 = nn.BatchNorm1d(hidden)
+        self.dr = dropout
+        self.head = nn.Sequential(
+            nn.Linear(hidden * 2, hidden), nn.ReLU(),
+            nn.Dropout(dropout), nn.Linear(hidden, 1)
+        )
+        _init(self)
+
+    def forward(self, x, edge_index, batch):
+        h1 = F.relu(self.b1(self.c1(x, edge_index)))
+        h1 = F.dropout(h1, self.dr * 0.5, training=self.training)
+        h2 = F.relu(self.b2(self.c2(h1, edge_index)))
+        h2 = h2 + h1  # residual
+        h2 = F.dropout(h2, self.dr, training=self.training)
+        pooled = torch.cat([global_mean_pool(h2, batch), global_max_pool(h2, batch)], dim=1)
+        return torch.sigmoid(self.head(pooled))
+
+
+# ── training & evaluation ────────────────────────────────────
+@torch.no_grad()
+def predict_patient_scores(model, cache, patients, pat_fovs, device):
+    """Predict per-patient scores by averaging subgraph → FOV → patient."""
+    model.eval()
+    out = {}
+    for p in patients:
+        fov_means = []
+        for fi in pat_fovs[p]:
+            subs = cache[fi]
+            if not subs:
+                fov_means.append(0.5); continue
+            loader = DataLoader(subs, batch_size=64, shuffle=False)
+            preds = []
+            for bd in loader:
+                bd = bd.to(device)
+                preds.extend(model(bd.x, bd.edge_index, bd.batch).view(-1).cpu().tolist())
+            fov_means.append(float(np.mean(preds)))
+        out[p] = fov_means
+    return out
+
+
+def patient_auc(pat_scores, pat_label):
+    yt = [pat_label[p] for p in pat_scores]
+    yp = [np.mean(pat_scores[p]) for p in pat_scores]
+    return roc_auc_score(yt, yp) if len(np.unique(yt)) > 1 else 0.5
+
+
+def train_with_val(model, cache, fit_patients, val_patients,
+                   pat_fovs, pat_label, pos_weight, cfg, device):
+    """Train with early stopping on validation AUC."""
+    opt = torch.optim.AdamW(model.parameters(), lr=cfg['lr'], weight_decay=cfg['weight_decay'])
+    sched = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        opt, mode='max', patience=6, factor=0.5, min_lr=1e-5)
+    best_auc = 0.0; best_state = None; no_imp = 0
+
+    # Build training loader
+    fit_fovs = [fi for p in fit_patients for fi in pat_fovs[p]]
+    ds = []
+    for i in fit_fovs:
+        ds.extend(cache[i])
+    loader = DataLoader(ds, batch_size=cfg['batch_size'], shuffle=True)
+
+    for epoch in range(cfg['epochs']):
+        model.train()
+        for bd in loader:
+            bd = bd.to(device)
+            opt.zero_grad()
+            pred = model(bd.x, bd.edge_index, bd.batch).view(-1)
+            target = bd.y.float().view(-1)
+            weight = torch.where(target == 1, pos_weight, torch.ones_like(pos_weight))
+            F.binary_cross_entropy(pred, target, weight=weight).backward()
+            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            opt.step()
+
+        vauc = patient_auc(
+            predict_patient_scores(model, cache, val_patients, pat_fovs, device), pat_label)
+        sched.step(vauc)
+
+        if vauc > best_auc:
+            best_auc = vauc; best_state = deepcopy(model.state_dict()); no_imp = 0
+        else:
+            no_imp += 1
+        if epoch >= 10 and no_imp >= cfg['patience']:
+            break
+
+    if best_state:
+        model.load_state_dict(best_state)
+    return model
+
+
+def bootstrap_ci(yt, yp, n=5000):
+    aucs = []
+    for _ in range(n):
+        idx = resample(range(len(yt)), replace=True)
+        a, b = np.array(yt)[idx], np.array(yp)[idx]
+        if len(np.unique(a)) > 1:
+            aucs.append(roc_auc_score(a, b))
+    if len(aucs) < 10:
+        return 0.0, 1.0
+    aucs.sort()
+    return aucs[int(.025 * len(aucs))], aucs[int(.975 * len(aucs))]
+
+
+# ── main ─────────────────────────────────────────────────────
+def main(n_seeds=100, reps=None, print_every=10, config=None):
+    cfg = {**DEFAULT_CONFIG, **(config or {})}
+    if reps is None:
+        reps = [2, 4, 6]
+
+    print(f"CUDA: {torch.cuda.is_available()}")
+    with open(cfg['cache_path'], 'rb') as f:
+        data_dict_orig, meta_df = pickle.load(f)
+
+    data_raw = {
+        i: Data(x=data_dict_orig[i].x.clone(),
+                edge_index=data_dict_orig[i].edge_index.clone(),
+                y=data_dict_orig[i].y.clone())
+        for i in range(len(data_dict_orig))
+    }
+    raw_dim = data_raw[0].x.shape[1]
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    pat_label = meta_df.groupby('patient')['label'].first().to_dict()
+    pat_fovs = meta_df.groupby('patient')['graph_idx'].apply(list).to_dict()
+    pat_list = list(meta_df['patient'].unique())
+    pat_ys = [pat_label[p] for p in pat_list]
+    print(f"Patients: {len(pat_list)} | C0: {pat_ys.count(0)} | C1: {pat_ys.count(1)} | Dim: {raw_dim}")
+
+    # CV splits
+    rskf = RepeatedStratifiedKFold(n_splits=3, n_repeats=10, random_state=42)
+    all_splits = list(rskf.split(pat_list, pat_ys))
+    selected_reps = [r - 1 for r in forced_reps]  # 0-indexed
+
+    # Pre-sample subgraphs per seed
+    print(f"Pre-sampling subgraphs for {n_seeds} seeds...")
+    t_pre = time.time()
+    caches = {}
+    for s in range(n_seeds):
+        caches[s] = presample(data_raw, cfg, seed=42 + s * 1000)
+    print(f"Pre-sampling done in {(time.time() - t_pre) / 60:.1f} min")
+
+    # Training loop
+    t0 = time.time()
+    total_jobs = len(selected_reps) * 3 * n_seeds
+    pbar = tqdm(total=total_jobs, desc=f"Training (seeds={n_seeds})")
+
+    all_seed_scores = {s: {} for s in range(n_seeds)}
+
+    for rep_idx in selected_reps:
+        for fi in range(3):
+            global_fi = rep_idx * 3 + fi
+            trm, tem = all_splits[global_fi]
+            trp = [pat_list[i] for i in trm]
+            tep = [pat_list[i] for i in tem]
+
+            # Fixed val split per fold
+            set_seed(42 + global_fi * 100)
+            pos = [p for p in trp if pat_label[p] == 1]
+            neg = [p for p in trp if pat_label[p] == 0]
+            nv = max(1, int(len(trp) * 0.2) // 2)
+            vp = random.sample(pos, min(nv, len(pos))) + random.sample(neg, min(nv, len(neg)))
+            fp = [p for p in trp if p not in vp]
+            fc0 = sum(1 for p in fp if pat_label[p] == 0)
+            fc1 = sum(1 for p in fp if pat_label[p] == 1)
+            pw = torch.tensor([fc0 / max(fc1, 1)], device=device)
+
+            for s in range(n_seeds):
+                set_seed(42 + global_fi * 100 + s)
+                model = GCN_2hop(raw_dim, cfg['hidden'], cfg['dropout']).to(device)
+                model = train_with_val(
+                    model, caches[s], fp, vp, pat_fovs, pat_label, pw, cfg, device)
+                scores = predict_patient_scores(model, caches[s], tep, pat_fovs, device)
+                all_seed_scores[s][(rep_idx, fi)] = scores
+                del model
+                torch.cuda.empty_cache()
+                pbar.update(1)
+
+    pbar.close()
+
+    # ── compute results ──────────────────────────────────────
+    def compute_aucs_for_seeds(seed_range):
+        rep_aucs = []
+        for rep_idx in selected_reps:
+            rep_scores = {}
+            for fi in range(3):
+                tep_set = set()
+                for s in seed_range:
+                    tep_set.update(all_seed_scores[s][(rep_idx, fi)].keys())
+                for p in tep_set:
+                    seed_vals = []
+                    for s in seed_range:
+                        if p in all_seed_scores[s][(rep_idx, fi)]:
+                            seed_vals.append(np.mean(all_seed_scores[s][(rep_idx, fi)][p]))
+                    rep_scores[p] = np.mean(seed_vals)
+            yt = [pat_label[p] for p in rep_scores]
+            yp = [rep_scores[p] for p in rep_scores]
+            rep_aucs.append(roc_auc_score(yt, yp))
+        return rep_aucs
+
+    # Progressive printing
+    if n_seeds >= print_every * 2:
+        print(f"\n── Progressive results (seeds={n_seeds}) ──")
+        for k in range(print_every, n_seeds + 1, print_every):
+            aucs = compute_aucs_for_seeds(range(k))
+            mean_a = np.mean(aucs); std_a = np.std(aucs)
+            per_rep = "  ".join([f"R{forced_reps[i]}={aucs[i]:.4f}" for i in range(len(aucs))])
+            print(f"  Seeds 1-{k:3d}: Mean={mean_a:.4f}±{std_a:.4f}  [{per_rep}]")
+
+    # Final summary
+    final_aucs = compute_aucs_for_seeds(range(n_seeds))
+    all_pat_scores = {}
+    for rep_idx in selected_reps:
+        for fi in range(3):
+            tep_set = set()
+            for s in range(n_seeds):
+                tep_set.update(all_seed_scores[s][(rep_idx, fi)].keys())
+            for p in tep_set:
+                seed_vals = [np.mean(all_seed_scores[s][(rep_idx, fi)][p])
+                             for s in range(n_seeds) if p in all_seed_scores[s][(rep_idx, fi)]]
+                all_pat_scores[p] = np.mean(seed_vals)
+    final_yt_all = [pat_label[p] for p in all_pat_scores]
+    final_yp_all = [all_pat_scores[p] for p in all_pat_scores]
+    ci = bootstrap_ci(final_yt_all, final_yp_all)
+
+    print(f"\n{'=' * 60}")
+    print(f"RESULTS  (3-fold CV × {n_seeds} seeds × {len(forced_reps)} repeats)")
+    print(f"{'=' * 60}")
+    for ri, rep_idx in enumerate(selected_reps):
+        print(f"  Rep {rep_idx + 1:2d}: AUC = {final_aucs[ri]:.4f}")
+    print(f"{'─' * 60}")
+    print(f"  Mean ± Std : {np.mean(final_aucs):.4f} ± {np.std(final_aucs):.4f}")
+    print(f"  Range      : [{min(final_aucs):.4f}, {max(final_aucs):.4f}]")
+    print(f"  Pooled 95%CI: [{ci[0]:.4f}, {ci[1]:.4f}]")
+    print(f"{'=' * 60}")
+    print(f"Time: {(time.time() - t0) / 60:.1f} min")
+
+
 def parse_args():
-    parser = argparse.ArgumentParser(description='Graph Neural Network for Classification')
-    parser.add_argument('--data_file', type=str, default='mel_alpha_0.01_buffer_0_NPNN.pickle',
-                        help='Path to preprocessed data file')
-    parser.add_argument('--cv_type', type=str, default='kfold', choices=['kfold', 'loo'],
-                        help='Cross-validation type: kfold or loo (leave-one-out)')
-    parser.add_argument('--n_folds', type=int, default=5,
-                        help='Number of folds for k-fold cross-validation')
-    parser.add_argument('--test_size', type=float, default=0.2,
-                        help='Test set size for k-fold CV')
-    parser.add_argument('--val_ratio', type=float, default=0.15,
-                        help='Validation set ratio')
-    parser.add_argument('--epochs', type=int, default=300,
-                        help='Maximum number of training epochs')
-    parser.add_argument('--lr', type=float, default=0.002,
-                        help='Learning rate')
-    parser.add_argument('--weight_decay', type=float, default=5e-5,
-                        help='Weight decay for L2 regularization')
-    parser.add_argument('--hidden_channels', type=str, default='64,32,16',
-                        help='Comma-separated list of hidden layer sizes')
-    parser.add_argument('--dropout_rate', type=float, default=0.25,
-                        help='Dropout rate')
-    parser.add_argument('--conv_type', type=str, default='gcn', choices=['gcn', 'sage', 'graph', 'gat'],
-                        help='GNN convolution type')
-    parser.add_argument('--residual', action='store_true',
-                        help='Use residual connections')
-    parser.add_argument('--verbose', type=int, default=1, choices=[0, 1, 2],
-                        help='Verbosity level: 0=quiet, 1=normal, 2=detailed')
-    parser.add_argument('--group1', type=str, default='NP',
-                        help='First group label')
-    parser.add_argument('--group2', type=str, default='NN',
-                        help='Second group label')
-    parser.add_argument('--seed', type=int, default=42,
-                        help='Random seed for reproducibility')
-    
-    args = parser.parse_args()
-    # Convert hidden_channels string to list of ints
-    args.hidden_channels = [int(x) for x in args.hidden_channels.split(',')]
-    return args
+    parser = argparse.ArgumentParser(description='GNN patient-level classification')
+    parser.add_argument('--folds', type=int, default=3, help='Number of folds')
+    parser.add_argument('--seeds', type=int, default=100, help='Number of random seeds per fold')
+    parser.add_argument('--reps', nargs='+', type=int, default=[2, 4, 6],
+                        help='Which CV repeats to use (1-indexed)')
+    parser.add_argument('--graphs', type=str, default='graphs_with_meta.pkl',
+                        help='Path to graphs pickle from build_graphs.py')
+    parser.add_argument('--print_every', type=int, default=10,
+                        help='Print progressive results every N seeds')
+    return parser.parse_args()
 
-# Main execution function
-def main():
-    # Parse command-line arguments
+
+if __name__ == '__main__':
     args = parse_args()
-    
-    # Set global seed for reproducibility
-    set_seed(args.seed)
-    
-    # Load data
-    print(f"Loading data from {args.data_file}...")
-    with open(args.data_file, 'rb') as p:
-        preprocessed_data = pickle.load(p)
-    
-    print(f"Comparing groups: {args.group1} vs {args.group2}")
-    
-    # Get data stats
-    data_indices = list(preprocessed_data.keys())
-    ys = [preprocessed_data[i].y.item() for i in data_indices]
-    class_counts = {0: ys.count(0), 1: ys.count(1)}
-    print(f"Class distribution: Class 0: {class_counts[0]}, Class 1: {class_counts[1]}")
-    print(f"Total samples: {len(ys)}")
-    
-    # Perform cross-validation
-    results = perform_cross_validation(
-        preprocessed_data=preprocessed_data,
-        cv_type=args.cv_type,
-        n_folds=args.n_folds,
-        test_size=args.test_size,
-        val_ratio=args.val_ratio,
-        epochs=args.epochs,
-        lr=args.lr,
-        weight_decay=args.weight_decay,
-        hidden_channels=args.hidden_channels,
-        dropout_rate=args.dropout_rate,
-        conv_type=args.conv_type,
-        residual=args.residual,
-        verbose=args.verbose,
-        group1=args.group1,
-        group2=args.group2
+    print(f"Config: seeds={args.seeds} | reps={args.reps} | graphs={args.graphs}")
+    main(
+        n_folds = args.folds,
+        n_seeds=args.seeds,
+        forced_reps=args.reps,
+        print_every=args.print_every,
+        config={'cache_path': args.graphs},
     )
-    
-    print(f"\nFinal {args.cv_type.upper()} CV Results:")
-    print(f"AUC Score: {results['auc']:.4f}")
-    print(f"PR-AUC Score: {results['pr_auc']:.4f}")
-    if args.cv_type == 'kfold':
-        print(f"Fold AUCs: {[f'{auc:.4f}' for auc in results['fold_aucs']]}")
-        print(f"Mean Fold AUC: {np.mean(results['fold_aucs']):.4f} ± {np.std(results['fold_aucs']):.4f}")
-    print(f"Results saved to {results['results_dir']}")
-    
-    # Return results for further use or visualization
-    return results
-
-# If run as a script
-if __name__ == "__main__":
-    main()
