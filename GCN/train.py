@@ -358,7 +358,7 @@ if __name__ == '__main__':
     main(
         n_folds = args.folds,
         n_seeds=args.seeds,
-        forced_reps=args.reps,
+        reps=args.reps,
         print_every=args.print_every,
         config={'cache_path': args.graphs},
     )
