@@ -252,13 +252,9 @@ if __name__ == "__main__":
     # Example motif: CD4T -- Tumor pair (by string class names)
     motif = """
     
-    A.type = cd8 t cell
-    B.type = blood vessels
-    C.type = unidentified
-    D.type = dcs
+    A.type = mac
+    B.type = b cell
     A -> B
-    B -> C
-    C -> D
     """
 
     hits_by_fov, wide = motif_instances_per_fov_from_csv(

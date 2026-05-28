@@ -33,7 +33,10 @@ The first tutorial notebooks are:
 
 - `tutorials/01_data_preparation.ipynb`
 - `tutorials/02_fanmod_and_cism_initialization.ipynb`
+- `tutorials/03b_soft_motif_selection.ipynb`
 - `tutorials/03_analysis_from_serialized_cism.ipynb`
+
+`03b_soft_motif_selection.ipynb` starts from the serialized artifact created by tutorial 02 and ranks motifs with the multi-objective soft motif selection framework.
 
 
 ### Prepare dataset for analysis
@@ -165,6 +168,28 @@ All preparation routes normalize column names on a copy first, so downstream cod
                                              classes=<list of classes>)
     
 extract_by with DiscriminativeFeatureKey.STRUCTURE_AND_CELL_IDENTITIES use motif canonical representation to discriminate.
+
+#### Multi-objective soft motif selection:
+
+    from cism import (
+        MotifSelectionWeights,
+        SoftMotifSelectionConfig,
+        StabilityGateConfig,
+        evaluate_soft_motif_selection_loocv,
+        score_soft_motifs_from_discriminator,
+    )
+
+    selection_config = SoftMotifSelectionConfig(
+        labels=["POSITIVE", "NEGATIVE"],
+        top_k=10,
+        weights=MotifSelectionWeights(effect=2.0, abundance=1.0, prevalence=1.0, confidence=1.0, dispersion=0.5),
+        gate=StabilityGateConfig(tau=0.6, gamma=2.0),
+    )
+
+    soft_result = score_soft_motifs_from_discriminator(discriminator, selection_config)
+    loocv_result = evaluate_soft_motif_selection_loocv(discriminator, selection_config)
+
+The soft selector ranks motif `ID` features by effect size, abundance, prevalence, statistical confidence, dispersion desirability, and a multiplicative LOOCV stability gate.
 
 
 #### Plot number of discriminative motifs versus discrimination stringency parameter:
