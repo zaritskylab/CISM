@@ -134,7 +134,20 @@ def validate_graph_dataframe(dataframe: pd.DataFrame, route_name: str = "graph r
 
 def encode_cell_types(values: Iterable) -> tuple[dict, pd.Series]:
     labels = pd.Series(list(values))
-    ordered_labels = sorted(labels.dropna().astype(str).unique().tolist())
+    unique_labels = labels.dropna().astype(str).unique().tolist()
+
+    def is_int_like(value: str) -> bool:
+        try:
+            int(value)
+        except ValueError:
+            return False
+        return True
+
+    if unique_labels and all(is_int_like(label) for label in unique_labels):
+        ordered_labels = sorted(unique_labels, key=lambda label: int(label))
+    else:
+        ordered_labels = sorted(unique_labels)
+
     cell_type_to_id = {label: idx for idx, label in enumerate(ordered_labels)}
     encoded = labels.astype(str).map(cell_type_to_id)
     return cell_type_to_id, encoded

@@ -549,13 +549,30 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
 
     def discover(self, extract_by: DiscriminativeFeatureKey, classes: list=None):
         patient_class_dict = self.patient_class_df[DiscriminativeMotifs.PATIENT_CLASS].to_dict()
-        self.cism.motifs_dataset[DiscriminativeMotifs.PATIENT_CLASS] = self.cism.motifs_dataset.Patient_uId.transform(
-            lambda row: patient_class_dict[row]).astype('category')
+        patient_classes = self.cism.motifs_dataset.Patient_uId.map(patient_class_dict)
+        missing_patient_uids = sorted(self.cism.motifs_dataset.loc[patient_classes.isna(), "Patient_uId"].astype(str).unique())
+        if missing_patient_uids:
+            warnings.warn(
+                "Dropping motif rows for patients without tissue-state labels: "
+                + ", ".join(missing_patient_uids)
+            )
+
+        self.cism.motifs_dataset = self.cism.motifs_dataset.loc[~patient_classes.isna()].copy()
+        self.cism.motifs_dataset[DiscriminativeMotifs.PATIENT_CLASS] = (
+            self.cism.motifs_dataset.Patient_uId.map(patient_class_dict).astype('category')
+        )
+
+        if classes is None:
+            classes = list(self.cism.motifs_dataset[DiscriminativeMotifs.PATIENT_CLASS].cat.categories)
+
+        class_filtered_data = self.cism.motifs_dataset[
+            self.cism.motifs_dataset[DiscriminativeMotifs.PATIENT_CLASS].isin(classes)
+        ]
+        if class_filtered_data.empty:
+            raise ValueError(f"No motif rows matched the requested classes: {classes}")
 
         discriminative_motifs, _ = self._extract_discriminative(
-            x_data=self.cism.motifs_dataset[
-                self.cism.motifs_dataset[
-                    DiscriminativeMotifs.PATIENT_CLASS].isin(classes)],
+            x_data=class_filtered_data,
             discriminative_group_key=DiscriminativeMotifs.PATIENT_CLASS,
             discriminative_feature_key=extract_by.value,
             common_cell_type=list(self.common_cells.keys())
@@ -628,13 +645,18 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
                 ),
             )
 
-            analyze_result = self.analyze_motifs(
-                feature_conf=tuned_feature_conf,
-                exclude_patients=exclude_patients,
-                n_jobs=n_jobs,
-                prefer=prefer,
-                random_state=np.random.RandomState(random_state),
-            )
+            try:
+                analyze_result = self.analyze_motifs(
+                    feature_conf=tuned_feature_conf,
+                    exclude_patients=exclude_patients,
+                    n_jobs=n_jobs,
+                    prefer=prefer,
+                    random_state=np.random.RandomState(random_state),
+                )
+            except ValueError as exc:
+                if "No discriminative features were selected" in str(exc):
+                    return 0.0
+                raise
 
             if metric == "roc_auc":
                 return analyze_result.get_roc_auc_score()
@@ -1142,6 +1164,12 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
                 x_train_dataset = pd.concat([x_train_dataset, pd.DataFrame(vector_dict, index=[patient_uId])])
 
         clf = RandomForestClassifier(random_state=random_state, n_jobs=-1)
+        if x_train_dataset is None or len(unique_motifs_colors) + len(unique_motifs) == 0:
+            raise ValueError(
+                "No discriminative features were selected for the current stringency. "
+                "Try lowering shared_percentage or increasing max_class_features."
+            )
+
         clf.fit(x_train_dataset.drop(DiscriminativeMotifs.PATIENT_CLASS, axis=1),
                 x_train_dataset[DiscriminativeMotifs.PATIENT_CLASS])
 

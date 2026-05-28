@@ -204,7 +204,7 @@ def motif_instances_per_fov_from_csv(
     x_col: str = "centroid_x",
     y_col: str = "centroid_y",
     type_col: str = "class",
-    class_col: str = "Group:",
+    #class_col: str = "Group:",
     classes: List[str] = ['NN', 'NP'],
     patient_col: Optional[str] = None,  # e.g., "patient number" if present
     induced: bool = False,
@@ -217,7 +217,7 @@ def motif_instances_per_fov_from_csv(
     """
     spec = parse_motif_text(motif_text)
     df = pd.read_csv(csv_path)
-    df = df[df[class_col].isin(classes)]
+    #df = df[df[class_col].isin(classes)]
     if fov_col not in df.columns or id_col not in df.columns:
         raise KeyError(f"Expected columns '{fov_col}' and '{id_col}' in CSV.")
     for c in (x_col, y_col, type_col):
@@ -265,7 +265,7 @@ if __name__ == "__main__":
         x_col="centroid-0",
         y_col="centroid-1",
         type_col="pred_mapped",
-        class_col= "Group",
+        #class_col= "Group",
         classes=['NN', 'NP'],
         patient_col="patient number",   # set to your patient column if present
         induced=False      # True to require induced subgraph

@@ -4,12 +4,17 @@ import pandas as pd
 import matplotlib
 import numpy as np
 
+from cism.helpers import string_base64_pickle
+
 
 def convert_to_labels(original_dict: dict, cells_type: dict):
     return {k: cells_type[int(v)] for k, v in original_dict.items()}
 
 
 def draw_motif(motif: nx.Graph, cells_type: dict):
+    if isinstance(motif, str):
+        motif = string_base64_pickle(motif)
+
     plt.figure(figsize=(10, 6))
     new_labels = convert_to_labels(nx.get_node_attributes(motif, name='type'), cells_type)
 
