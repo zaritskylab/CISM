@@ -9,13 +9,20 @@ import pandas as pd
 from scipy.stats import mannwhitneyu
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import roc_auc_score
+from tqdm.auto import tqdm
 
 from cism.cism import AnalyzeMotifsResult, DiscriminativeMotifs
+from cism.optimization import OptunaTuningResult
 
 
 @dataclass(frozen=True)
 class MotifSelectionWeights:
-    """Weights for the additive part of multi-objective motif scoring."""
+    """Weights for the additive part of multi-objective motif scoring.
+
+    The final additive score is divided by the sum of these weights, so only
+    their relative scale matters. Use ``optimize_soft_motif_weights`` to tune
+    these values against LOOCV Random Forest performance.
+    """
 
     effect: float = 1.0
     abundance: float = 1.0
@@ -56,7 +63,27 @@ class StabilityGateConfig:
 
 @dataclass(frozen=True)
 class SoftMotifSelectionConfig:
-    """Configuration for multi-objective soft motif selection."""
+    """Configuration for multi-objective soft motif selection.
+
+    Parameters
+    ----------
+    labels:
+        The two disease-state labels to compare. The first label is treated as
+        the positive class when reporting ROC AUC from downstream CISM
+        evaluation helpers.
+    top_k:
+        Number of motif IDs to select after ranking by final score.
+    weights:
+        Relative coefficients for the additive score components.
+    gate:
+        Stability gate applied multiplicatively after additive scoring.
+    fanmod_p_value_threshold:
+        Optional FANMOD p-value filter. Set to ``None`` to score all motif rows.
+    pseudocount:
+        Small positive value used in log fold-change calculations.
+    epsilon:
+        Small positive value used in dispersion calculations.
+    """
 
     labels: list[str]
     top_k: int
@@ -87,7 +114,13 @@ class SoftMotifSelectionResult:
     labels: list[str]
 
     def to_inference_feature_config(self):
-        """Return an InferenceFC that reuses the selected motif ids."""
+        """Return an ``InferenceFC`` that reuses the selected motif IDs.
+
+        ``InferenceFC`` does not rediscover motifs inside each validation fold.
+        It instructs CISM to train/evaluate using the already selected motif
+        IDs, which is useful after a final selection pass or for deployment on
+        a fixed motif panel.
+        """
         from cism.cism import InferenceFC
 
         return InferenceFC(labels=self.labels, motifs_ids=self.selected_motif_ids)
@@ -110,6 +143,36 @@ class SoftMotifLOOCVResult:
 
     def get_roc_auc_score(self) -> float:
         return self.analyze_result.get_roc_auc_score()
+
+
+@dataclass
+class SoftMotifWeightTuningResult(OptunaTuningResult):
+    """Optuna result plus a ready-to-use soft motif selection config."""
+
+    base_config: SoftMotifSelectionConfig
+
+    @property
+    def best_weights(self) -> MotifSelectionWeights:
+        params = self.best_params
+        return MotifSelectionWeights(
+            effect=params["effect"],
+            abundance=params["abundance"],
+            prevalence=params["prevalence"],
+            confidence=params["confidence"],
+            dispersion=params["dispersion"],
+        )
+
+    @property
+    def best_config(self) -> SoftMotifSelectionConfig:
+        return SoftMotifSelectionConfig(
+            labels=list(self.base_config.labels),
+            top_k=self.base_config.top_k,
+            weights=self.best_weights,
+            gate=self.base_config.gate,
+            fanmod_p_value_threshold=self.base_config.fanmod_p_value_threshold,
+            pseudocount=self.base_config.pseudocount,
+            epsilon=self.base_config.epsilon,
+        )
 
 
 def build_patient_motif_matrix(
@@ -198,18 +261,110 @@ def score_soft_motifs_from_discriminator(discriminator, config: SoftMotifSelecti
     )
 
 
+def optimize_soft_motif_weights(
+    discriminator,
+    base_config: SoftMotifSelectionConfig,
+    n_trials: int = 30,
+    metric: str = "roc_auc",
+    random_state: int = 0,
+    weight_range: tuple[float, float] = (0.0, 4.0),
+    n_jobs: int = 1,
+    show_progress_bar: bool = True,
+) -> SoftMotifWeightTuningResult:
+    """Tune additive soft-motif weights with Optuna.
+
+    Each trial samples the five additive weights, evaluates motif selection in
+    the same leakage-safe LOOCV Random Forest framework used by
+    ``evaluate_soft_motif_selection_loocv``, and maximizes the requested metric.
+    The stability gate and all non-weight settings are inherited from
+    ``base_config``.
+
+    Supported metrics are ``"roc_auc"``, ``"accuracy"``, and
+    ``"mean_feature_count"``. The returned object exposes ``best_weights`` and
+    ``best_config`` for direct reuse in ``score_soft_motifs_from_discriminator``.
+    """
+    try:
+        import optuna
+    except ImportError as exc:
+        raise ImportError(
+            "Optuna is required for optimize_soft_motif_weights(). Install it with 'pip install optuna'."
+        ) from exc
+
+    low, high = float(weight_range[0]), float(weight_range[1])
+    if low < 0 or high <= low:
+        raise ValueError("weight_range must be a non-negative increasing (low, high) tuple.")
+    if metric not in {"roc_auc", "accuracy", "mean_feature_count"}:
+        raise ValueError("metric must be one of: roc_auc, accuracy, mean_feature_count.")
+
+    sampler = optuna.samplers.TPESampler(seed=random_state)
+
+    def objective(trial):
+        weights = MotifSelectionWeights(
+            effect=trial.suggest_float("effect", low, high),
+            abundance=trial.suggest_float("abundance", low, high),
+            prevalence=trial.suggest_float("prevalence", low, high),
+            confidence=trial.suggest_float("confidence", low, high),
+            dispersion=trial.suggest_float("dispersion", low, high),
+        )
+        try:
+            tuned_config = SoftMotifSelectionConfig(
+                labels=list(base_config.labels),
+                top_k=base_config.top_k,
+                weights=weights,
+                gate=base_config.gate,
+                fanmod_p_value_threshold=base_config.fanmod_p_value_threshold,
+                pseudocount=base_config.pseudocount,
+                epsilon=base_config.epsilon,
+            )
+        except ValueError:
+            return 0.0
+
+        try:
+            result = evaluate_soft_motif_selection_loocv(
+                discriminator=discriminator,
+                config=tuned_config,
+                random_state=random_state,
+                show_progress=False,
+            )
+        except ValueError as exc:
+            if "No motifs selected" in str(exc) or "At least one motif selection weight" in str(exc):
+                return 0.0
+            raise
+
+        if metric == "roc_auc":
+            return result.get_roc_auc_score()
+        if metric == "accuracy":
+            metrics = result.get_metrics()
+            if "accuracy" in metrics:
+                return float(metrics["accuracy"])
+            if "acc" in metrics:
+                return float(metrics["acc"])
+            return float((result.results["TP"].sum() + result.results["TN"].sum()) / result.results.shape[0])
+        return float(result.results["cFeatures"].mean())
+
+    study = optuna.create_study(direction="maximize", sampler=sampler)
+    study.optimize(objective, n_trials=n_trials, n_jobs=n_jobs, show_progress_bar=show_progress_bar)
+    return SoftMotifWeightTuningResult(study=study, metric_name=metric, base_config=base_config)
+
+
 def compute_loocv_selection_stability(
     motifs_df: pd.DataFrame,
     patient_class_df: pd.DataFrame,
     config: SoftMotifSelectionConfig,
     motif_col: str = "ID",
+    show_progress: bool = True,
 ) -> pd.Series:
     """Estimate motif stability as training-fold top-k selection frequency under LOOCV."""
     local_classes = _prepare_patient_classes(patient_class_df, config.labels)
     selected_counts: defaultdict[Any, int] = defaultdict(int)
     eligible_counts: defaultdict[Any, int] = defaultdict(int)
 
-    for held_out_patient in local_classes.index:
+    for held_out_patient in tqdm(
+        local_classes.index,
+        desc="Estimating motif stability",
+        leave=False,
+        disable=not show_progress,
+    ):
         train_classes = local_classes.drop(index=held_out_patient)
         train_motifs = motifs_df[motifs_df["Patient_uId"].isin(train_classes.index)]
         train_motifs = _filter_motifs(train_motifs, config.fanmod_p_value_threshold)
@@ -237,6 +392,7 @@ def evaluate_soft_motif_selection_loocv(
     discriminator,
     config: SoftMotifSelectionConfig,
     random_state: int = 0,
+    show_progress: bool = True,
 ) -> SoftMotifLOOCVResult:
     """Evaluate soft motif selection in a leakage-safe leave-one-patient-out loop."""
     patient_class_df = discriminator.get_patients_class(config.labels)
@@ -246,7 +402,12 @@ def evaluate_soft_motif_selection_loocv(
     fold_score_tables = {}
     selected_by_patient = {}
 
-    for held_out_patient in local_classes.index:
+    for held_out_patient in tqdm(
+        local_classes.index,
+        desc="Evaluating soft motif LOOCV",
+        leave=False,
+        disable=not show_progress,
+    ):
         train_classes = local_classes.drop(index=held_out_patient)
         test_classes = local_classes.loc[[held_out_patient]]
         train_motifs = full_motifs_df[full_motifs_df["Patient_uId"].isin(train_classes.index)]

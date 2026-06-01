@@ -19,7 +19,7 @@ import enum
 import pandas as pd
 import networkx as nx
 import numpy as np
-from tqdm.autonotebook import tqdm
+from tqdm.auto import tqdm
 
 
 class CISM:
@@ -366,6 +366,35 @@ class TopNFC(FeatureConfiguration):
 
 
 class InferenceFC(FeatureConfiguration):
+    """Feature configuration for evaluating a fixed motif panel.
+
+    ``InferenceFC`` is intentionally small: it stores the disease-state labels
+    and the motif IDs that should be used as Random Forest features by
+    ``TissueStateDiscriminativeMotifs.analyze_motifs``. Unlike
+    ``HardDiscriminativeFC`` and ``SoftDiscriminativeFC``, it does not discover
+    or rank motifs inside each validation fold.
+
+    Use this class when motif IDs were selected elsewhere, for example by
+    ``score_soft_motifs_from_discriminator`` or a curated biological panel, and
+    you want CISM to reuse that fixed set for inference/validation.
+
+    Parameters
+    ----------
+    labels:
+        Exactly two disease-state labels to classify.
+    motifs_ids:
+        Motif IDs to use as model features. Their frequencies are computed per
+        patient with the same CISM frequency formula used elsewhere.
+    cell_type_composition_patient_map:
+        Optional per-patient cell-type composition features inherited from
+        ``FeatureConfiguration``. Usually left as ``None`` for soft motif
+        selection outputs.
+    motifs_patient_map:
+        Optional per-patient motif feature map inherited from
+        ``FeatureConfiguration``. Usually left as ``None`` when ``motifs_ids``
+        is fixed globally.
+    """
+
     def __init__(self,
                  labels: list,
                  motifs_ids: list,
