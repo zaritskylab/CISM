@@ -1,0 +1,51 @@
+# Python caches and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Test and tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Jupyter local state
+.ipynb_checkpoints/
+
+# Local secrets and machine-specific config
+.env
+.env.*
+*.local
+
+# Build and packaging artifacts
+build/
+dist/
+*.egg-info/
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Generated analysis artifacts
+outputs/
+results/
+figures/generated/
+logs/
+tmp/
+temp/
+cache/
+
+# FANMOD generated output
+fanmod_output/
+fanmod_cache/
+*.out
+*.dump
