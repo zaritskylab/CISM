@@ -2,7 +2,7 @@ import os
 import networkx as nx
 import pandas as pd
 import numpy as np
-from pairwise.common import Columns
+from baselines.pairwise.common import Columns
 
 
 class GraphReader:
