@@ -8,8 +8,8 @@ import shap
 from sklearn.ensemble import RandomForestClassifier
 from tqdm.autonotebook import tqdm
 from cism.cism import AnalyzeMotifsResult
-from pairwise.common import Columns
-from pairwise.reader import GraphReader
+from baselines.pairwise.common import Columns
+from baselines.pairwise.reader import GraphReader
 from collections import Counter
 
 

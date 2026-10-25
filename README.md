@@ -1,7 +1,7 @@
 # Context-dependent Identification of Spatial Motifs (CISM)
 
 ### Description
-Python package contains the code and **a demo notebook on public dataset MIBITOF-TNBC** (Keren, Leeat et al.
+Python package contains the code and a demo notebook on public dataset MIBITOF-TNBC (Keren, Leeat et al.
 Cell, Volume 174, Issue 6, 1373 - 1387.e19).)
 
 CISM is a two-step method to identify local interconnected cell structures associated with a disease state in single cell spatial proteomics data.
@@ -18,10 +18,35 @@ CISM is a two-step method to identify local interconnected cell structures assoc
 1. python3 -m venv venv
 2. activate venv (windows: venv\Scripts\activate, linux:source venv/bin/activate)
 3. python3 -m pip install requests
-4. python3 -m pip install -r requirement.txt
+4. python3 -m pip install -r requirements.txt
+5. python3 -m pip install -e .
+
+### 3-step pipeline
+The package now exposes the workflow as:
+
+1. `data_preparation` - make the dataset compatible with FANMOD+ and CISM
+2. `initialization` - run FANMOD+ and initialize CISM class with the configuration and dataset
+3. `analysis` - analyze CISM outputs
+
+Notebook tutorials live at the repository level, outside the `cism` package itself.
+The first tutorial notebooks are:
+
+- `tutorials/01_data_preparation.ipynb`
+- `tutorials/02_fanmod_and_cism_initialization.ipynb`
+- `tutorials/03b_soft_motif_selection.ipynb`
+- `tutorials/03_analysis_from_serialized_cism.ipynb`
+
+`03b_soft_motif_selection.ipynb` starts from the serialized artifact created by tutorial 02 and ranks motifs with the multi-objective soft motif selection framework.
+
+To learn more about the tutorial, view the tutorial README here - [Tutorial README](./tutorial/README_tutorial.md)
+
 
 ### Prepare dataset for analysis
-In order to analyze the proteomics data, we need to convert the patient's field of view (FOV) to a graph and store the graphs in a folder.
+In order to analyze the proteomics data, we need to convert each patient's field of view (FOV) to a graph and store the graphs in a folder.
+
+For FANMOD+ to work properly and later provide the necessary information for CISM, , we need to convert each patient's field of view (FOV) to a graph and store the graphs in a folder.
+The graph should specifically be in the format of colored edge list in the following format:
+
 Folder structure (with 1..n patients and 1..f field-of-view):
 - data
   - Dataset Name
@@ -32,30 +57,27 @@ Folder structure (with 1..n patients and 1..f field-of-view):
     - Patient_\<n>_FOV\<f>.txt
     - patient_class.csv
 
-#### Patient_\<i>_FOV\<k>.txt format
+each txt file represents a field of view (FOV) of a patient and should be in the following format:
+
+#### Patient_\<i>_FOV\<k>.txt format (LEDA)
 Each field-of-view file should be in the following format:
-<src cell id> <dst cell id> <src cell color id> <dst cell color id>
+
+`<src cell id> <dst cell id> <src cell color id> <dst cell color id>
 .....
-<src cell id> <dst cell id> <src cell color id> <dst cell color id>
+<src cell id> <dst cell id> <src cell color id> <dst cell color id>`
 
-For example assume the following adjacency matrix:
+For example assume the following graph:
 
-    0 1 1
-    1 0 0
-    1 0 0
+![LEDA_format](README_resources/LEDA_format.png)
 
-with nodes colors:
 
-    color[0] = 0
-    color[1] = 1
-    color[2] = 2
+The preparation layer supports three routes into FANMOD/CISM-compatible network files:
 
-The matrix should be represented as a colord edge list:
+- annotated centroid tables &rarr; graph builder &rarr; colored edge LEDA txt files
+- annotated edge tables &rarr; colored edge LEDA txt files
+- prebuilt `networkx` graphs &rarr; graph files &rarr; colored edge LEDA txt files
 
-    0 1 0 1
-    1 0 1 0
-    2 1 2 1
-    1 2 1 2
+![data_preparation](README_resources/data_preparation.png)
 
 #### patient_class.csv format
 CISM method support two classes type:
@@ -77,7 +99,7 @@ or when the class is a continuous value of survival days:
     TNBC2, 3822
 
 ### Find discriminative motifs in nutshell
-##### TL;DR For more comprehensive explanation please refer to TNBC notebook Tutrial under analysis folder [Notebook](./analysis/Tutorial/mibitof_tnbc_tutorial.ipynb)
+##### TL;DR For more comprehensive explanation please refer to TNBC notebook under anlysis folder [TNBC Notebook](./analysis/tnbc/mibitof_tnbc_tutorial.ipynb)
 
 #### Initiate CISM class with the configuration:
 
@@ -98,6 +120,30 @@ or when the class is a continuous value of survival days:
                      force_run_fanmod=<whether to override fanmod+ existing results>, 
                      force_parse=<whether to override existing parse files of fanmod+ outputs>, 
                      n_jobs=<number of jobs allows running in parallel>)
+
+`add_dataset(...)` now validates the raw dataset contract before FANMOD starts:
+
+- network files must be named `Patient_<patient_id>_FOV<fov>.txt`
+- each non-empty row must have `src_id dst_id src_type_id dst_type_id`
+- node type ids must be integers
+- `patient_class.csv` can be required explicitly when a workflow depends on it
+
+### Data preparation entry points
+
+    from cism import prepare_from_centroids, prepare_from_edge_annotations, prepare_from_graphs
+
+    result = prepare_from_centroids(
+        dataframe=<centroid dataframe>,
+        path_to_output_dir=<dataset directory>,
+        column_mapping={
+            "patient_id": "SampleID",
+            "cell_type": "cell type",
+        },
+        cell_type_mapper=<optional mapper or None>,
+        max_distance=100,
+    )
+
+All preparation routes normalize column names on a copy first, so downstream code always sees the canonical schema.
 
 #### Initiate discriminator:
 
@@ -125,12 +171,35 @@ or when the class is a continuous value of survival days:
     
 extract_by with DiscriminativeFeatureKey.STRUCTURE_AND_CELL_IDENTITIES use motif canonical representation to discriminate.
 
+#### Multi-objective soft motif selection:
+
+    from cism import (
+        MotifSelectionWeights,
+        SoftMotifSelectionConfig,
+        StabilityGateConfig,
+        evaluate_soft_motif_selection_loocv,
+        score_soft_motifs_from_discriminator,
+    )
+
+    selection_config = SoftMotifSelectionConfig(
+        labels=["POSITIVE", "NEGATIVE"],
+        top_k=10,
+        weights=MotifSelectionWeights(effect=2.0, abundance=1.0, prevalence=1.0, confidence=1.0, dispersion=0.5),
+        gate=StabilityGateConfig(tau=0.6, gamma=2.0),
+    )
+
+    soft_result = score_soft_motifs_from_discriminator(discriminator, selection_config)
+    loocv_result = evaluate_soft_motif_selection_loocv(discriminator, selection_config)
+
+The soft selector ranks motif `ID` features by effect size, abundance, prevalence, statistical confidence, dispersion desirability, and a multiplicative LOOCV stability gate.
+
 
 #### Plot number of discriminative motifs versus discrimination stringency parameter:
 
     discover_result.plot_number_of_motifs_versus_discrimination_stringency_parameter(class_to_color=<dict dieases class to color>)
 
-![img.png](img.png)
+For example, in the use-case of Melanonma Negative vs Positive:
+![img.png](README_resources/img.png)
 
 #### Show summary table of all the extracted discrimination motifs
 discover_result.discriminative_motifs will plot the full dataframe with all the extracted discriminative motifs
