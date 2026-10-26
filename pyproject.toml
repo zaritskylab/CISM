@@ -28,7 +28,7 @@ dependencies = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["cism", "cism.*"]
+include = ["cism", "cism.*", "baselines", "baselines.*"]
 
 [tool.setuptools.package-data]
 cism = ["FANMOD_binaries/*", "FANMOD_binaries/**/*"]
