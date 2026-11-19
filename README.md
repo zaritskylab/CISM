@@ -40,6 +40,8 @@ The first tutorial notebooks are:
 
 To learn more about the tutorial, view the tutorial README here - [Tutorial README](./tutorial/README_tutorial.md)
 
+To choose parameter values (motif size, stringency, maximum distance, cell-type exclusion) and run bias checks, see the [Parameter guidelines](./README_parameters.md).
+
 
 ### Prepare dataset for analysis
 In order to analyze the proteomics data, we need to convert each patient's field of view (FOV) to a graph and store the graphs in a folder.
