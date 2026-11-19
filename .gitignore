@@ -38,6 +38,8 @@ Thumbs.db
 # Generated analysis artifacts
 outputs/
 results/
+runtime/
+runs/
 figures/generated/
 logs/
 tmp/
@@ -48,6 +50,7 @@ cache/
 fanmod_output/
 fanmod_cache/
 parse_cache/
+pet_data/
 *.out
 *.dump
 
