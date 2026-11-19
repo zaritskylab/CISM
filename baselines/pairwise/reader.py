@@ -4,9 +4,9 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 
+from baselines.utils import Columns
 from cism.data_preparation import parse_network_filename
 from cism.data_preparation.common import NETWORK_FILE_PATTERN
-from .common import Columns
 
 
 class GraphReader:

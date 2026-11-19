@@ -8,8 +8,8 @@ import shap
 from sklearn.ensemble import RandomForestClassifier
 from tqdm.autonotebook import tqdm
 
+from baselines.utils import Columns, load_tissue_state
 from cism.cism import AnalyzeMotifsResult
-from .common import Columns
 from .reader import GraphReader
 
 
@@ -20,7 +20,7 @@ class PairwiseAnalysis:
         tissue_state_to_string: str,
         tissue_state_func=None,
     ):
-        self._patient_class_df = PairwiseAnalysis._load_tissue_state(
+        self._patient_class_df = load_tissue_state(
             tissue_state_csv_path=tissue_state_csv_path,
             tissue_state_to_string=tissue_state_to_string,
             tissue_state_func=tissue_state_func,
@@ -270,16 +270,3 @@ class PairwiseAnalysis:
             )
 
         return AnalyzeMotifsResult(analyze_results=results, patients_ids=full_graph_df.Patient_uId.unique(), labels=labels)
-
-    @staticmethod
-    def _load_tissue_state(tissue_state_csv_path: str, tissue_state_to_string: dict[int, str], tissue_state_func):
-        patient_class_df = pd.read_csv(tissue_state_csv_path, index_col=0, names=[Columns.PATIENT_CLASS_ID])
-        if tissue_state_func:
-            patient_class_df[Columns.PATIENT_CLASS] = patient_class_df[Columns.PATIENT_CLASS_ID].transform(
-                tissue_state_func, axis=0
-            )
-        else:
-            patient_class_df[Columns.PATIENT_CLASS] = patient_class_df[Columns.PATIENT_CLASS_ID].transform(
-                lambda row: tissue_state_to_string[row].replace(" ", ""), axis=0
-            )
-        return patient_class_df
