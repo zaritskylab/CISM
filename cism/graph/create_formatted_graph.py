@@ -12,6 +12,12 @@ import pandas as pd
 import matplotlib.cm as cm
 import matplotlib.colors as colors
 from cism.graph.plugin_clean_tumor_clusters import process_graph
+from cism.data_preparation.common import (
+    PreparationResult,
+    encode_cell_types,
+    rename_columns_copy,
+    validate_centroid_dataframe,
+)
 
 '''
 Originally written by Yuval Tamir (tamiryuv@post.bgu.ac.il)
@@ -23,44 +29,64 @@ class GraphBuilder():
     def __init__(self, cells_csv, 
                  common_cells_mapper,
                  colnames_mapper_dict):
-            #### sepcific csv col names
-            self.cols_mapper = colnames_mapper_dict
-            self.cell_type_col = colnames_mapper_dict['cell_types']
-            self.patients_col = colnames_mapper_dict['patient_id']
-            #### the cells data csv
-            self.cells = cells_csv
-            #### the mapper between cell-type -> common cell type
+            self.cols_mapper = dict(colnames_mapper_dict or {})
             self.cells_mapper = common_cells_mapper
-            self.cells['common_cell_types'] = self.cells[self.cell_type_col].apply(lambda x: self.cells_mapper[x])
-            #### cell type 2 index
-            common_cell_types = np.unique(self.cells['common_cell_types'])
-            self.common_cell_type_mapper = {v : k for k,v in enumerate(common_cell_types)}
+
+            normalized_cells = rename_columns_copy(cells_csv, self.cols_mapper)
+            validate_centroid_dataframe(normalized_cells, route_name="GraphBuilder centroid route")
+            self.cells = normalized_cells.copy()
+
+            if self.cells_mapper is None:
+                self.cells['common_cell_types'] = self.cells['cell_type'].astype(str)
+            else:
+                missing_labels = sorted(set(self.cells['cell_type']) - set(self.cells_mapper))
+                if missing_labels:
+                    raise KeyError(
+                        "GraphBuilder cell_type mapper is missing labels for: "
+                        f"{missing_labels}. Pass cell_type_mapper=None to keep labels as-is."
+                    )
+                self.cells['common_cell_types'] = self.cells['cell_type'].apply(lambda x: self.cells_mapper[x])
+
+            self.common_cell_type_mapper, encoded_cell_types = encode_cell_types(
+                self.cells['common_cell_types'].astype(str).tolist()
+            )
+            self.cells['common_cell_type_id'] = encoded_cell_types.to_numpy()
             
             
             
     def build_graph(self,
                     path_to_output_dir,
                     max_distance,
-                    exclude_cell_type: str,
+                    exclude_cell_type: str = None,
                     removed_cluster_buffer=0,
                     removed_cluster_alpha=0.01):
         from scipy.spatial import distance
+        from pathlib import Path
+
+        output_dir = Path(path_to_output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        created_files = []
 
         ## for every patient and fov get extract the neighbors
-        for point in self.cells[self.patients_col].unique():
+        for point in self.cells['patient_id'].unique():
             for fov in self.cells['fov'].unique():
-                data_p = self.cells[(self.cells[self.patients_col] == point) & (self.cells['fov'] == fov)]
+                data_p = self.cells[(self.cells['patient_id'] == point) & (self.cells['fov'] == fov)]
                 if len(data_p) < 1:
                     ## FOV and patient mismatch, skipping
                     continue
                 coords = [(i, j) for i,j in zip(data_p['centroid-0'], data_p['centroid-1'])]
                 points = np.array(coords)
-                indptr_neigh, neighbours = Delaunay(points).vertex_neighbor_vertices
+                use_dense_neighborhood = len(points) < 3
+                if not use_dense_neighborhood:
+                    indptr_neigh, neighbours = Delaunay(points).vertex_neighbor_vertices
                 edge = []
                 node_ft = []
                 for i,row in enumerate(data_p.iterrows()):
-                        i_neigh = neighbours[indptr_neigh[i]:indptr_neigh[i+1]]
-                        node_ft.append(self.common_cell_type_mapper[row[1]['common_cell_types']])
+                        if use_dense_neighborhood:
+                            i_neigh = np.array([j for j in range(len(points)) if j != i], dtype=int)
+                        else:
+                            i_neigh = neighbours[indptr_neigh[i]:indptr_neigh[i+1]]
+                        node_ft.append(int(row[1]['common_cell_type_id']))
                         for cell in i_neigh:
                             pair = np.array([i, cell])
                             edge.append(pair)
@@ -93,17 +119,24 @@ class GraphBuilder():
                         print(f"Found at least one cluster to remove - Patient_{point}_FOV{fov}.txt")
 
 
-                with open(f"{path_to_output_dir}Patient_{point}_FOV{fov}.txt", "w") as file1:
+                output_file = output_dir / f"Patient_{point}_FOV{fov}.txt"
+                with output_file.open("w", encoding="utf-8") as file1:
                     for idx,(left,right) in enumerate(zip(left_cell, right_cell)):
                         if (left not in G.nodes()) or (right not in G.nodes()):
                             continue
                         if (max_distance is None) or distance.euclidean(coords[left], coords[right]) <= max_distance:
                             file1.write(f'{left} {right} {int(x[mapper[left]])} {int(x[mapper[right]])}\n')
+                created_files.append(output_file.name)
         print(self.common_cell_type_mapper)
+        return PreparationResult(
+            output_dir=str(output_dir),
+            files=created_files,
+            cell_type_to_id=self.common_cell_type_mapper,
+            route="centroids",
+        )
 
     def visualize_voronoi(self, patient, fov = None):
-        patients_col = self.cols_mapper['patient_id']
-        self.data_p = self.cells[(self.cells[patients_col ] == patient) & (self.cells['fov'] == fov)]
+        self.data_p = self.cells[(self.cells['patient_id'] == patient) & (self.cells['fov'] == fov)]
         coords = [(i, j) for i,j in zip(self.data_p['centroid-0'], self.data_p['centroid-1'])]
         self.idx2cell_type = {k : v for k,v in enumerate(self.data_p['common_cell_types'])}
         self.points = np.array(coords)
@@ -128,7 +161,7 @@ class GraphBuilder():
         node_ft = []
         for i,row in enumerate(self.data_p.iterrows()):
                 i_neigh = neighbours[indptr_neigh[i]:indptr_neigh[i+1]]
-                node_ft.append(self.common_cell_type_mapper[row[1]['common_cell_types']])
+                node_ft.append(int(row[1]['common_cell_type_id']))
                 for cell in i_neigh:
                     pair = np.array([i, cell])
                     edge.append(pair)

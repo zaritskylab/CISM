@@ -1,12 +1,15 @@
 import typing
 from typing import List, Dict
 from collections import Counter, defaultdict
+from pathlib import Path
+import warnings
 
 import matplotlib.pyplot as plt
 from sklearn.ensemble import RandomForestClassifier
 import shap
 
-from cism import helpers
+from . import helpers
+from cism.data_preparation import validate_network_dataset_directory
 
 from joblib import Parallel, delayed
 from joblib.externals.loky import set_loky_pickler
@@ -16,7 +19,7 @@ import enum
 import pandas as pd
 import networkx as nx
 import numpy as np
-from tqdm.autonotebook import tqdm
+from tqdm.auto import tqdm
 
 
 class CISM:
@@ -68,45 +71,79 @@ class CISM:
         force_parse = kwargs.setdefault("force_parse", False)
         p_value = kwargs.setdefault("p_value", 0.05)
         quantile_threshold = kwargs.setdefault("quantile_threshold", 1)
+        require_patient_class = kwargs.setdefault("require_patient_class", False)
 
         motifs_dataset = None
         set_loky_pickler()
 
-        for r, d, files in os.walk(self.network_dataset_root_path + dataset_folder):
-            Parallel(n_jobs=n_jobs, prefer=prefer)(delayed(self._analyze_dataset)(
-                                                                        file=file,
-                                                                        output_dir=self.fanmod_output_root_path + dataset_folder,
-                                                                        cache_dir=self.fanmod_cache_root_path + dataset_folder,
-                                                                        force_run_fanmod=force_run_fanmod,
-                                                                        raw_data_folder=self.network_dataset_root_path + dataset_folder,
-                                                                        force_parse=force_parse,
-                                                                        enable_parse=False) for file in tqdm(files))
+        dataset_root = Path(self.network_dataset_root_path) / str(dataset_folder).lstrip("/\\")
+        files = validate_network_dataset_directory(
+            dataset_root,
+            require_patient_class=require_patient_class,
+        )
 
-            result_list = Parallel(n_jobs=n_jobs, prefer=prefer, return_as="generator")(delayed(self._analyze_dataset)(
-                                                                        file=file,
-                                                                        output_dir=self.fanmod_output_root_path + dataset_folder,
-                                                                        cache_dir=self.fanmod_cache_root_path + dataset_folder,
-                                                                        force_run_fanmod=False,
-                                                                        raw_data_folder=self.network_dataset_root_path + dataset_folder,
-                                                                        force_parse=force_parse,
-                                                                        enable_parse=True,
-                                                                        p_value=p_value,
-                                                                        quantile_threshold=quantile_threshold) for file in tqdm(files))
+        output_dir = str(Path(self.fanmod_output_root_path) / str(dataset_folder).lstrip("/\\"))
+        cache_dir = str(Path(self.fanmod_cache_root_path) / str(dataset_folder).lstrip("/\\"))
+        raw_data_folder = str(dataset_root)
 
-            motifs_dataset = pd.concat(result_list, ignore_index=True)
-            motifs_dataset['FOV'] = motifs_dataset['FOV'].astype('category')
-            result = None
+        Parallel(n_jobs=n_jobs, prefer=prefer)(
+            delayed(self._analyze_dataset)(
+                file=file,
+                output_dir=output_dir,
+                cache_dir=cache_dir,
+                force_run_fanmod=force_run_fanmod,
+                raw_data_folder=raw_data_folder,
+                force_parse=force_parse,
+                enable_parse=False,
+            )
+            for file in tqdm(files, desc="Running FANMOD", leave=False)
+        )
 
-            result_list = None
-            motifs_dataset[dataset_type] = dataset_name
-            motifs_dataset['Patient_uId'] = motifs_dataset[dataset_type] + motifs_dataset['Patient'].astype('str')
-            motifs_dataset[dataset_type] = motifs_dataset[dataset_type].astype('category')
-            motifs_dataset['nunique_colors'] = motifs_dataset.nunique_colors.astype('int8')
-            motifs_dataset['Patient_uId'] = motifs_dataset['Patient_uId'].astype('category')
-            motifs_dataset['FOV'] = motifs_dataset['FOV'].astype('category')
+        parse_results = list(
+            tqdm(
+                Parallel(n_jobs=n_jobs, prefer=prefer, return_as="generator")(
+                    delayed(self._analyze_dataset)(
+                        file=file,
+                        output_dir=output_dir,
+                        cache_dir=cache_dir,
+                        force_run_fanmod=False,
+                        raw_data_folder=raw_data_folder,
+                        force_parse=force_parse,
+                        enable_parse=True,
+                        p_value=p_value,
+                        quantile_threshold=quantile_threshold,
+                    )
+                    for file in files
+                ),
+                total=len(files),
+                desc="Parsing FANMOD output",
+                leave=False,
+            )
+        )
 
-        self.motifs_dataset = motifs_dataset if self.motifs_dataset is None else pd.concat([self.motifs_dataset, motifs_dataset])
-        self.motifs_dataset.reset_index(drop=True)
+        non_empty_results = [result for result in parse_results if result is not None and not result.empty]
+        if not non_empty_results:
+            warnings.warn(
+                "CISM add_dataset completed validation and FANMOD execution but produced no parsed motifs. "
+                "Check FANMOD output, p_value/quantile_threshold settings, and dataset compatibility."
+            )
+            return
+
+        motifs_dataset = pd.concat(non_empty_results, ignore_index=True)
+        motifs_dataset['FOV'] = motifs_dataset['FOV'].astype('category')
+        motifs_dataset[dataset_type] = dataset_name
+        motifs_dataset['Patient_uId'] = motifs_dataset[dataset_type] + motifs_dataset['Patient'].astype('str')
+        motifs_dataset[dataset_type] = motifs_dataset[dataset_type].astype('category')
+        motifs_dataset['nunique_colors'] = motifs_dataset.nunique_colors.astype('int8')
+        motifs_dataset['Patient_uId'] = motifs_dataset['Patient_uId'].astype('category')
+        motifs_dataset['FOV'] = motifs_dataset['FOV'].astype('category')
+
+        self.motifs_dataset = (
+            motifs_dataset
+            if self.motifs_dataset is None
+            else pd.concat([self.motifs_dataset, motifs_dataset], ignore_index=True)
+        )
+        self.motifs_dataset.reset_index(drop=True, inplace=True)
 
     def motif_dataset(self) -> pd.DataFrame:
         """
@@ -329,6 +366,35 @@ class TopNFC(FeatureConfiguration):
 
 
 class InferenceFC(FeatureConfiguration):
+    """Feature configuration for evaluating a fixed motif panel.
+
+    ``InferenceFC`` is intentionally small: it stores the disease-state labels
+    and the motif IDs that should be used as Random Forest features by
+    ``TissueStateDiscriminativeMotifs.analyze_motifs``. Unlike
+    ``HardDiscriminativeFC`` and ``SoftDiscriminativeFC``, it does not discover
+    or rank motifs inside each validation fold.
+
+    Use this class when motif IDs were selected elsewhere, for example by
+    ``score_soft_motifs_from_discriminator`` or a curated biological panel, and
+    you want CISM to reuse that fixed set for inference/validation.
+
+    Parameters
+    ----------
+    labels:
+        Exactly two disease-state labels to classify.
+    motifs_ids:
+        Motif IDs to use as model features. Their frequencies are computed per
+        patient with the same CISM frequency formula used elsewhere.
+    cell_type_composition_patient_map:
+        Optional per-patient cell-type composition features inherited from
+        ``FeatureConfiguration``. Usually left as ``None`` for soft motif
+        selection outputs.
+    motifs_patient_map:
+        Optional per-patient motif feature map inherited from
+        ``FeatureConfiguration``. Usually left as ``None`` when ``motifs_ids``
+        is fixed globally.
+    """
+
     def __init__(self,
                  labels: list,
                  motifs_ids: list,
@@ -512,13 +578,35 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
 
     def discover(self, extract_by: DiscriminativeFeatureKey, classes: list=None):
         patient_class_dict = self.patient_class_df[DiscriminativeMotifs.PATIENT_CLASS].to_dict()
-        self.cism.motifs_dataset[DiscriminativeMotifs.PATIENT_CLASS] = self.cism.motifs_dataset.Patient_uId.transform(
-            lambda row: patient_class_dict[row]).astype('category')
+        patient_classes = self.cism.motifs_dataset.Patient_uId.map(patient_class_dict)
+        missing_patient_uids = sorted(self.cism.motifs_dataset.loc[patient_classes.isna(), "Patient_uId"].astype(str).unique())
+        if missing_patient_uids:
+            warnings.warn(
+                "Dropping motif rows for patients without tissue-state labels: "
+                + ", ".join(missing_patient_uids)
+            )
+
+        self.cism.motifs_dataset = self.cism.motifs_dataset.loc[~patient_classes.isna()].copy()
+        self.cism.motifs_dataset[DiscriminativeMotifs.PATIENT_CLASS] = (
+            self.cism.motifs_dataset.Patient_uId.map(patient_class_dict).astype('category')
+        )
+
+        if classes is None:
+            classes = list(self.cism.motifs_dataset[DiscriminativeMotifs.PATIENT_CLASS].cat.categories)
+
+        class_filtered_data = self.cism.motifs_dataset[
+            self.cism.motifs_dataset[DiscriminativeMotifs.PATIENT_CLASS].isin(classes)
+        ].copy()
+        # keep only the compared classes as categories, so a dataset with more classes than the two compared
+        # does not leave empty ones behind (seaborn's hue colors every category)
+        class_filtered_data[DiscriminativeMotifs.PATIENT_CLASS] = (
+            class_filtered_data[DiscriminativeMotifs.PATIENT_CLASS].cat.remove_unused_categories()
+        )
+        if class_filtered_data.empty:
+            raise ValueError(f"No motif rows matched the requested classes: {classes}")
 
         discriminative_motifs, _ = self._extract_discriminative(
-            x_data=self.cism.motifs_dataset[
-                self.cism.motifs_dataset[
-                    DiscriminativeMotifs.PATIENT_CLASS].isin(classes)],
+            x_data=class_filtered_data,
             discriminative_group_key=DiscriminativeMotifs.PATIENT_CLASS,
             discriminative_feature_key=extract_by.value,
             common_cell_type=list(self.common_cells.keys())
@@ -552,6 +640,71 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
             final_results_list.append(len(agg_features))
 
         return final_results_list
+
+    def tune_stringency(self,
+                        feature_conf: FeatureConfiguration,
+                        n_trials: int = 20,
+                        metric: str = "roc_auc",
+                        random_state: int = 0,
+                        **kwargs):
+        try:
+            import optuna
+        except ImportError as exc:
+            raise ImportError(
+                "Optuna is required for tune_stringency(). Install it with 'pip install optuna'."
+            ) from exc
+
+        from cism.optimization import OptunaTuningResult, _clone_feature_conf
+
+        shared_percentage_range = kwargs.setdefault("shared_percentage_range", (0.1, 0.95))
+        max_class_features_range = kwargs.setdefault("max_class_features_range", (1, 25))
+        n_jobs = kwargs.setdefault("n_jobs", 1)
+        prefer = kwargs.setdefault("prefer", "processes")
+        exclude_patients = kwargs.setdefault("exclude_patients", [])
+        direction = kwargs.setdefault("direction", "maximize")
+        sampler = kwargs.setdefault("sampler", optuna.samplers.TPESampler(seed=random_state))
+        study_name = kwargs.setdefault("study_name", f"cism-stringency-{metric}")
+
+        def objective(trial):
+            tuned_feature_conf = _clone_feature_conf(
+                feature_conf,
+                shared_percentage=trial.suggest_float(
+                    "shared_percentage",
+                    float(shared_percentage_range[0]),
+                    float(shared_percentage_range[1]),
+                ),
+                max_class_features=trial.suggest_int(
+                    "max_class_features",
+                    int(max_class_features_range[0]),
+                    int(max_class_features_range[1]),
+                ),
+            )
+
+            try:
+                analyze_result = self.analyze_motifs(
+                    feature_conf=tuned_feature_conf,
+                    exclude_patients=exclude_patients,
+                    n_jobs=n_jobs,
+                    prefer=prefer,
+                    random_state=np.random.RandomState(random_state),
+                )
+            except ValueError as exc:
+                if "No discriminative features were selected" in str(exc):
+                    return 0.0
+                raise
+
+            if metric == "roc_auc":
+                return analyze_result.get_roc_auc_score()
+            if metric == "feature_count":
+                return float(analyze_result.results["cFeatures"].mean())
+
+            raise ValueError(
+                f"Unsupported metric '{metric}' for tune_stringency. Supported metrics: roc_auc, feature_count."
+            )
+
+        study = optuna.create_study(direction=direction, sampler=sampler, study_name=study_name)
+        study.optimize(objective, n_trials=n_trials)
+        return OptunaTuningResult(study=study, metric_name=metric)
 
     def _patient_class_permutation_test(self,
                                         feature_conf: HardDiscriminativeFC,
@@ -1046,6 +1199,12 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
                 x_train_dataset = pd.concat([x_train_dataset, pd.DataFrame(vector_dict, index=[patient_uId])])
 
         clf = RandomForestClassifier(random_state=random_state, n_jobs=-1)
+        if x_train_dataset is None or len(unique_motifs_colors) + len(unique_motifs) == 0:
+            raise ValueError(
+                "No discriminative features were selected for the current stringency. "
+                "Try lowering shared_percentage or increasing max_class_features."
+            )
+
         clf.fit(x_train_dataset.drop(DiscriminativeMotifs.PATIENT_CLASS, axis=1),
                 x_train_dataset[DiscriminativeMotifs.PATIENT_CLASS])
 
@@ -1098,7 +1257,7 @@ class TissueStateDiscriminativeMotifs(DiscriminativeMotifs):
 
     @staticmethod
     def _add_cell_identity_feature(data: pd.DataFrame, common_cell_type: Dict[int, str]):
-        from cism import helpers
+        from . import helpers
 
         # create color vec and color vec hash columns
         common_cell_type_counter = dict(
