@@ -11,6 +11,8 @@ import networkx as nx
 import os
 import numpy as np
 
+from cism.data_preparation.common import DatasetValidationError, parse_network_filename
+
 
 def create_weight_matrix_from_motifs(discriminator,
                                      cells_type: dict,
@@ -34,7 +36,11 @@ def create_weight_matrix_from_motifs(discriminator,
                 right_node = target_motif.nodes[edge[1]]['type']
                 pairwise_cell_types_count_matrix.loc[cells_type[int(left_node)], cells_type[int(right_node)]] += motifs_weight.loc[motif_id]
 
-    return pairwise_cell_types_count_matrix/np.matrix(pairwise_cell_types_count_matrix).sum()
+    total_weight = pairwise_cell_types_count_matrix.to_numpy().sum()
+    if total_weight == 0:
+        # No motifs for this class - keep the zero matrix instead of 0/0 NaNs.
+        return pairwise_cell_types_count_matrix
+    return pairwise_cell_types_count_matrix / total_weight
 
 def run_fanmod(
         FANMOD_exe: str,
@@ -59,7 +65,7 @@ def run_fanmod(
         return False
 
 
-def parse_leda(lines: [str]) -> nx.Graph:
+def parse_leda(lines: list[str]) -> nx.Graph:
     """
     The code was originally written in networkx.
     Here I just adjusted the parser to support the format that exported from the FANMOD tool.
@@ -215,14 +221,14 @@ def analyze_file(
                  enable_parse: bool,
                  p_value: float = 0.05,
                  quantile_threshold: float = 0.9) -> pd.DataFrame:
-    import re
     import pathlib
 
     empty_df = pd.DataFrame()
-    _, file_type = re.split("[.]", file)
+    _, file_type = os.path.splitext(file)
+    file_type = file_type.lstrip(".")
     if file_type != 'txt':
         return empty_df
-    _, patient_num, fov, _ = re.split("[_ .]", file)
+    patient_num, fov = parse_network_filename(file)
 
     pathlib.Path(output_dir + '/' + str(motif_size) + '/').mkdir(exist_ok=True, parents=True)
     result_file = output_dir + '/' + str(motif_size) + '/' + patient_num + '_' + fov + '.csv'
@@ -263,7 +269,7 @@ def analyze_file(
     df = df[~df['Mean_Freq'].isna()]
 
     df['ID'] = df.ID.astype('int64')
-    df['Patient'] = df.Patient.astype('int16')
+    df['Patient'] = df.Patient.astype('int64')
     df.Freq = pd.to_numeric(df.Freq, errors='coerce')
     df.p_value = pd.to_numeric(df.p_value, errors='coerce')
     df.z_score = pd.to_numeric(df.z_score, errors='coerce')
