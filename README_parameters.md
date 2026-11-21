@@ -11,7 +11,7 @@ notebooks in [tutorial/](tutorial/).
 **Contents**
 
 1. [Where each parameter is set](#where-each-parameter-is-set)
-2. [Quick reference](#quick-reference)
+2. [List of the main parameters](#quick-reference)
 3. [A minimal run](#a-minimal-run)
 4. [Motif size](#motif-size)
 5. [Discriminative-motif stringency](#discriminative-motif-stringency)
@@ -38,7 +38,7 @@ Changing a stage 1 parameter means building new graphs and rerunning FANMOD+, wh
 [Caching and reruns](#caching-and-reruns)). Stage 3 parameters reuse the motifs already enumerated, so they are
 cheap to change.
 
-## What parameters we will dive into?
+## List of the main parameters
 
 | Parameter | Start with | Adjust when |
 |---|---|---|
@@ -221,7 +221,7 @@ matters when many motifs pass.
 ### Optional: tune stringency by cross-validated AUC
 
 `tune_stringency` searches the stringency with Optuna and scores each trial by the leave-one-patient-out ROC AUC of
-`analyze_motifs`. These are the settings used by [tutorial/cism_tutorial.py](tutorial/cism_tutorial.py):
+`analyze_motifs`. An example on how to use this Optuna search:
 
 ```python
 tuning_result = discriminator.tune_stringency(
@@ -231,41 +231,11 @@ tuning_result = discriminator.tune_stringency(
     random_state=0,
     n_jobs=1,
     prefer="threads",
-    shared_percentage_range=(0.2, 0.6),
+    shared_percentage_range=(0.2, 0.6),  # set the range for searching the stringency parameter
     max_class_features_range=(30, 30),   # keep the cap fixed
 )
 print(tuning_result.best_params, tuning_result.best_score)
 ```
-
-The best AUC is chosen among many trials on the same patients, so it is optimistic. Compare it with the AUC obtained
-after shuffling the patient labels at the chosen stringency:
-
-```python
-import numpy as np
-
-chosen_conf = HardDiscriminativeFC(
-    labels=LABELS,
-    extract_by=DiscriminativeFeatureKey.STRUCTURE_AND_CELL_IDENTITIES,
-    use_cells_type_composition=False,
-    use_motifs=True,
-    shared_percentage=tuning_result.best_params["shared_percentage"],
-    max_class_features=tuning_result.best_params["max_class_features"],
-)
-null_aucs = []
-for seed in range(10):
-    try:
-        shuffled = discriminator.analyze_motifs(
-            feature_conf=chosen_conf, exclude_patients=[], n_jobs=1, prefer="threads",
-            rand_patient_class=True, random_state=np.random.RandomState(seed),
-        )
-        null_aucs.append(shuffled.get_roc_auc_score())
-    except ValueError:                   # no discriminative motifs under this shuffle
-        null_aucs.append(np.nan)
-print(np.nanmean(null_aucs), np.nanmax(null_aucs))
-```
-
-This shuffles at a fixed stringency. For a stricter control that reruns the whole stringency search on each shuffled
-labeling, see [figures/scripts/permutation_control.py](figures/scripts/permutation_control.py).
 
 ## Maximum spatial distance
 
@@ -281,8 +251,7 @@ pixels, choose a physical distance first and convert it with the pixel size of y
 max_distance (pixels) = distance (µm) / pixel size (µm per pixel)
 ```
 
-For example, the MIBI-TOF images in the TNBC tutorial cover 800 µm with 2048 pixels (about 0.39 µm per pixel), so the
-tutorial's `max_distance=100` pixels corresponds to about 39 µm. When coordinates are already in microns, as in many
+For example, the MIBI-TOF images in the TNBC tutorial cover 800 µm with 2048 pixels (about 0.39 µm per pixel), so `max_distance=100` in TNBC dataset pixels corresponds to about 39 µm. When coordinates are already in microns, as in many
 spatial transcriptomics tables, give the distance in microns directly.
 
 Guidelines:
@@ -357,8 +326,6 @@ prep = prepare_from_centroids(
     removed_cluster_buffer=0,        # in coordinate units; > 0 grows each shape, < 0 shrinks it
 )
 ```
-
-These are the settings used for the melanoma cohort in [tutorial/run_melanoma_pipeline.py](tutorial/run_melanoma_pipeline.py).
 
 Notes:
 
@@ -508,8 +475,7 @@ results.
 | `random_state` | `analyze_motifs(...)` | unseeded | Pass `np.random.RandomState(seed)` to make the random forest results reproducible. |
 | `dataset_name` | `add_dataset(...)` | required | Prefix of every patient key (`Patient_uId = dataset_name + patient_id`). It must match the keys in `patient_class.csv`. |
 
-A continuous outcome, such as survival days, needs a cutoff function. The TNBC analysis in
-[tutorial/run_tnbc_pipeline.py](tutorial/run_tnbc_pipeline.py) splits survival at 1000 days:
+A continuous outcome, such as survival days, needs a cutoff function. The TNBC analysis splits survival at 1000 days:
 
 ```python
 def survival_class(survival_days):
@@ -547,9 +513,7 @@ The cache is keyed by folder, motif size and file name, not by graph content. If
 - Rebuild in place and pass `force_run_fanmod=True, force_parse=True` to `add_dataset` once.
 
 Use separate output folders for every configuration you compare. It also helps to save a small file next to the graphs
-that records the settings used to build them, as [tutorial/run_seaad_pipeline.py](tutorial/run_seaad_pipeline.py)
-does with `graph_max_distance.json`. Avoid `.txt` for that file, because every `.txt` file in the dataset folder is
-read as a graph.
+that records the settings used to build them. Avoid `.txt` for that file, because every `.txt` file in the dataset folder is read as a graph.
 
 ## Computational configuration
 
@@ -572,9 +536,6 @@ jobs than cores.
 `n_jobs=1, prefer="threads"`, as the scripts in [tutorial/](tutorial/) do, and raise it only if memory allows. Each
 tuning trial is a full leave-one-patient-out run. Expect minutes per trial for 3-node motifs on about 40 patients and
 tens of minutes for 5-node motifs.
-
-**Cluster runs**: [tutorial/](tutorial/) has SLURM examples (`*_runner.sbatch`) that run one motif size per job
-through the `run_*_pipeline.py` scripts.
 
 ## What to report
 
