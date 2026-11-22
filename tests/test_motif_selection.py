@@ -113,7 +113,7 @@ def test_stability_gate_examples_match_plan():
 
 
 def test_final_score_is_gated_normalized_additive_score():
-    weights = MotifSelectionWeights(effect=2, abundance=1, prevalence=1, confidence=1, dispersion=1)
+    weights = MotifSelectionWeights(effect=2/6, abundance=1/6, prevalence=1/6, confidence=1/6, dispersion=1/6)
     gate = StabilityGateConfig(tau=0.5, gamma=1.0)
     config = SoftMotifSelectionConfig(labels=["A", "B"], top_k=2, weights=weights, gate=gate)
 
@@ -140,6 +140,8 @@ def test_loocv_stability_uses_training_folds():
 
 
 def test_public_api_imports_from_cism():
+    from cism import optimize_soft_motif_weights
     from cism import score_soft_motifs as exported_score_soft_motifs
 
     assert exported_score_soft_motifs is score_soft_motifs
+    assert callable(optimize_soft_motif_weights)

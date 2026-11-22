@@ -216,3 +216,7 @@ discover_result.discriminative_motifs will plot the full dataframe with all the 
     ....
 
 ##### For more comprehensive explanation please refer to TNBC notebook demo under the demo folder [Notebook](./analysis/Tutorial/mibitof_tnbc_tutorial.ipynb)
+
+## Paper revision analyses
+
+The [analysis topic index](analysis/README.md) links to the revision code and usage instructions. Notebooks are committed without saved outputs; generated results and input datasets remain external.

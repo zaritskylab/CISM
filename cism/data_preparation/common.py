@@ -28,8 +28,11 @@ LEGACY_COLUMN_ALIASES = {
     "cell_types": "cell_type",
     "patient": "patient_id",
     "patient_number": "patient_id",
+    "patient number": "patient_id",
     "patient_num": "patient_id",
     "id": "cell_id",
+    "pred_mapped": "cell_type",
+    "pred": "cell_type",
     "type": "cell_type",
     "id1": "source_id",
     "id2": "target_id",
@@ -73,8 +76,8 @@ def normalize_column_mapping(column_mapping: Mapping[str, str] | None) -> dict[s
 
 def rename_columns_copy(
     dataframe: pd.DataFrame,
-    column_mapping: Mapping[str, str] | None = None,
-) -> pd.DataFrame:
+    column_mapping: Mapping[str, str] | None = None,) -> pd.DataFrame:
+
     renamed = dataframe.copy()
     normalized_mapping = normalize_column_mapping(column_mapping)
     rename_dict = {}

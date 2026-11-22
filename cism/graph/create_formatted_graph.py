@@ -22,11 +22,11 @@ from cism.data_preparation.common import (
 '''
 Originally written by Yuval Tamir (tamiryuv@post.bgu.ac.il)
 The code was adjusted by Amos Zamir (zamiramos@gmail.com)
- 
+
 Date: 16/12/2023
 '''
 class GraphBuilder():
-    def __init__(self, cells_csv, 
+    def __init__(self, cells_csv,
                  common_cells_mapper,
                  colnames_mapper_dict):
             self.cols_mapper = dict(colnames_mapper_dict or {})
@@ -35,7 +35,6 @@ class GraphBuilder():
             normalized_cells = rename_columns_copy(cells_csv, self.cols_mapper)
             validate_centroid_dataframe(normalized_cells, route_name="GraphBuilder centroid route")
             self.cells = normalized_cells.copy()
-
             if self.cells_mapper is None:
                 self.cells['common_cell_types'] = self.cells['cell_type'].astype(str)
             else:
@@ -51,9 +50,9 @@ class GraphBuilder():
                 self.cells['common_cell_types'].astype(str).tolist()
             )
             self.cells['common_cell_type_id'] = encoded_cell_types.to_numpy()
-            
-            
-            
+
+
+
     def build_graph(self,
                     path_to_output_dir,
                     max_distance,
@@ -171,7 +170,7 @@ class GraphBuilder():
         data = Data(x=x, edge_index=edge_index.contiguous())
         g1 = torch_geometric.utils.to_networkx(data,to_undirected=True,node_attrs=['x'])
         COLOR_SCHEME = "Paired"
-        nx.draw_networkx(g1, node_color=node_ft, node_size = 100, 
+        nx.draw_networkx(g1, node_color=node_ft, node_size = 100,
                          with_labels = False, cmap = COLOR_SCHEME)
         ax=plt.gca()
         norm = colors.Normalize(vmin=np.min(node_ft), vmax=np.max(node_ft))

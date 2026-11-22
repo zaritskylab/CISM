@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from collections import defaultdict
 from typing import Any
 
@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import mannwhitneyu
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, roc_auc_score
 from tqdm.auto import tqdm
 
 from cism.cism import AnalyzeMotifsResult, DiscriminativeMotifs
@@ -24,11 +24,20 @@ class MotifSelectionWeights:
     these values against LOOCV Random Forest performance.
     """
 
-    effect: float = 1.0
-    abundance: float = 1.0
-    prevalence: float = 1.0
-    confidence: float = 1.0
-    dispersion: float = 1.0
+    effect: float = 0.2
+    abundance: float = 0.2
+    prevalence: float = 0.2
+    confidence: float = 0.2
+    dispersion: float = 0.2
+
+    def __post_init__(self) -> None:
+        values = self.as_dict()
+        invalid = {name: value for name, value in values.items() if value < 0.0 or value > 1.0}
+        if invalid:
+            raise ValueError(f"Motif selection weights must be between 0 and 1: {invalid}")
+        total = sum(values.values())
+        if not np.isclose(total, 1.0):
+            raise ValueError(f"Motif selection weights must sum to 1.0, got {total:.6g}.")
 
     def as_dict(self) -> dict[str, float]:
         return {
@@ -79,6 +88,9 @@ class SoftMotifSelectionConfig:
         Stability gate applied multiplicatively after additive scoring.
     fanmod_p_value_threshold:
         Optional FANMOD p-value filter. Set to ``None`` to score all motif rows.
+    final_score_cutoff:
+        Optional minimum final score required before selecting motifs. Motifs
+        are still capped by ``top_k`` after this cutoff is applied.
     pseudocount:
         Small positive value used in log fold-change calculations.
     epsilon:
@@ -90,6 +102,7 @@ class SoftMotifSelectionConfig:
     weights: MotifSelectionWeights = field(default_factory=MotifSelectionWeights)
     gate: StabilityGateConfig = field(default_factory=StabilityGateConfig)
     fanmod_p_value_threshold: float | None = 0.05
+    final_score_cutoff: float | None = None
     pseudocount: float = 1e-9
     epsilon: float = 1e-9
 
@@ -98,6 +111,8 @@ class SoftMotifSelectionConfig:
             raise ValueError("Soft motif selection currently supports exactly two labels.")
         if self.top_k <= 0:
             raise ValueError("top_k must be positive.")
+        if self.final_score_cutoff is not None and self.final_score_cutoff < 0:
+            raise ValueError("final_score_cutoff must be non-negative when provided.")
         if self.pseudocount <= 0:
             raise ValueError("pseudocount must be positive.")
         if self.epsilon <= 0:
@@ -153,7 +168,7 @@ class SoftMotifWeightTuningResult(OptunaTuningResult):
 
     @property
     def best_weights(self) -> MotifSelectionWeights:
-        params = self.best_params
+        params = _normalize_weight_params(self.best_params)
         return MotifSelectionWeights(
             effect=params["effect"],
             abundance=params["abundance"],
@@ -164,12 +179,20 @@ class SoftMotifWeightTuningResult(OptunaTuningResult):
 
     @property
     def best_config(self) -> SoftMotifSelectionConfig:
+        params = self.best_params
+        gate = self.base_config.gate
+        if "tau" in params or "gamma" in params:
+            gate = StabilityGateConfig(
+                tau=float(params.get("tau", gate.tau)),
+                gamma=float(params.get("gamma", gate.gamma)),
+            )
         return SoftMotifSelectionConfig(
             labels=list(self.base_config.labels),
             top_k=self.base_config.top_k,
             weights=self.best_weights,
-            gate=self.base_config.gate,
+            gate=gate,
             fanmod_p_value_threshold=self.base_config.fanmod_p_value_threshold,
+            final_score_cutoff=self.base_config.final_score_cutoff,
             pseudocount=self.base_config.pseudocount,
             epsilon=self.base_config.epsilon,
         )
@@ -239,7 +262,7 @@ def score_soft_motifs(
     scores["stability_gate"] = scores["stability"].map(config.gate.apply)
     scores["final_score"] = scores["stability_gate"] * scores["additive_score"]
     scores = scores.sort_values(["final_score", "additive_score"], ascending=False)
-    selected = scores.head(config.top_k).index.tolist()
+    selected = _select_scored_motif_ids(scores, top_k=config.top_k, final_score_cutoff=config.final_score_cutoff)
 
     return SoftMotifSelectionResult(
         scores=scores.reset_index().rename(columns={"index": motif_col, "motif_id": motif_col}),
@@ -267,17 +290,27 @@ def optimize_soft_motif_weights(
     n_trials: int = 30,
     metric: str = "roc_auc",
     random_state: int = 0,
-    weight_range: tuple[float, float] = (0.0, 4.0),
+    weight_range: tuple[float, float] = (0.0, 1.0),
     n_jobs: int = 1,
     show_progress_bar: bool = True,
+    storage: str | None = None,
+    study_name: str | None = None,
+    load_if_exists: bool = True,
+    optimize_gate: bool = False,
+    tau_range: tuple[float, float] = (0.6, 1.0),
+    gamma_range: tuple[float, float] = (2.0, 10.0),
 ) -> SoftMotifWeightTuningResult:
     """Tune additive soft-motif weights with Optuna.
 
-    Each trial samples the five additive weights, evaluates motif selection in
+    Each trial samples five raw additive weight values, normalizes them to sum
+    to 1.0, evaluates motif selection in
     the same leakage-safe LOOCV Random Forest framework used by
     ``evaluate_soft_motif_selection_loocv``, and maximizes the requested metric.
     The stability gate and all non-weight settings are inherited from
-    ``base_config``.
+    ``base_config`` unless ``optimize_gate=True``.
+
+    Pass ``storage`` and ``study_name`` to persist a study, and keep
+    ``load_if_exists=True`` to resume it later with additional trials.
 
     Supported metrics are ``"roc_auc"``, ``"accuracy"``, and
     ``"mean_feature_count"``. The returned object exposes ``best_weights`` and
@@ -295,24 +328,56 @@ def optimize_soft_motif_weights(
         raise ValueError("weight_range must be a non-negative increasing (low, high) tuple.")
     if metric not in {"roc_auc", "accuracy", "mean_feature_count"}:
         raise ValueError("metric must be one of: roc_auc, accuracy, mean_feature_count.")
+    tau_low, tau_high = float(tau_range[0]), float(tau_range[1])
+    gamma_low, gamma_high = float(gamma_range[0]), float(gamma_range[1])
+    if optimize_gate and (tau_low <= 0 or tau_high <= tau_low):
+        raise ValueError("tau_range must be a positive increasing (low, high) tuple.")
+    if optimize_gate and (gamma_low <= 0 or gamma_high <= gamma_low):
+        raise ValueError("gamma_range must be a positive increasing (low, high) tuple.")
 
-    sampler = optuna.samplers.TPESampler(seed=random_state)
+    study_exists = False
+    if storage is not None and study_name is not None and load_if_exists:
+        study_exists = any(
+            summary.study_name == study_name
+            for summary in optuna.get_all_study_summaries(storage=storage)
+        )
+
+    sampler_seed = None if study_exists else random_state
+    sampler = optuna.samplers.TPESampler(seed=sampler_seed)
 
     def objective(trial):
+        raw_params = {
+            "effect": trial.suggest_float("effect", low, high),
+            "abundance": trial.suggest_float("abundance", low, high),
+            "prevalence": trial.suggest_float("prevalence", low, high),
+            "confidence": trial.suggest_float("confidence", low, high),
+            "dispersion": trial.suggest_float("dispersion", low, high),
+        }
+        normalized_params = _normalize_weight_params(raw_params)
+        for name, value in normalized_params.items():
+            trial.set_user_attr(f"weight_{name}", value)
+
         weights = MotifSelectionWeights(
-            effect=trial.suggest_float("effect", low, high),
-            abundance=trial.suggest_float("abundance", low, high),
-            prevalence=trial.suggest_float("prevalence", low, high),
-            confidence=trial.suggest_float("confidence", low, high),
-            dispersion=trial.suggest_float("dispersion", low, high),
+            effect=normalized_params["effect"],
+            abundance=normalized_params["abundance"],
+            prevalence=normalized_params["prevalence"],
+            confidence=normalized_params["confidence"],
+            dispersion=normalized_params["dispersion"],
         )
+        gate = base_config.gate
+        if optimize_gate:
+            gate = StabilityGateConfig(
+                tau=trial.suggest_float("tau", tau_low, tau_high),
+                gamma=trial.suggest_float("gamma", gamma_low, gamma_high),
+            )
         try:
             tuned_config = SoftMotifSelectionConfig(
                 labels=list(base_config.labels),
                 top_k=base_config.top_k,
                 weights=weights,
-                gate=base_config.gate,
+                gate=gate,
                 fanmod_p_value_threshold=base_config.fanmod_p_value_threshold,
+                final_score_cutoff=base_config.final_score_cutoff,
                 pseudocount=base_config.pseudocount,
                 epsilon=base_config.epsilon,
             )
@@ -342,9 +407,27 @@ def optimize_soft_motif_weights(
             return float((result.results["TP"].sum() + result.results["TN"].sum()) / result.results.shape[0])
         return float(result.results["cFeatures"].mean())
 
-    study = optuna.create_study(direction="maximize", sampler=sampler)
+    study = optuna.create_study(
+        direction="maximize",
+        sampler=sampler,
+        storage=storage,
+        study_name=study_name,
+        load_if_exists=load_if_exists,
+    )
     study.optimize(objective, n_trials=n_trials, n_jobs=n_jobs, show_progress_bar=show_progress_bar)
     return SoftMotifWeightTuningResult(study=study, metric_name=metric, base_config=base_config)
+
+
+def _normalize_weight_params(params: dict[str, float]) -> dict[str, float]:
+    components = ["effect", "abundance", "prevalence", "confidence", "dispersion"]
+    values = np.asarray([float(params[name]) for name in components], dtype=float)
+    if np.any(values < 0):
+        raise ValueError("Raw motif selection weight parameters must be non-negative.")
+    total = float(values.sum())
+    if total <= 0:
+        return {name: 1.0 / len(components) for name in components}
+    normalized = values / total
+    return {name: float(value) for name, value in zip(components, normalized)}
 
 
 def compute_loocv_selection_stability(
@@ -471,6 +554,124 @@ def evaluate_soft_motif_selection_loocv(
     )
 
 
+def evaluate_soft_motif_score_cutoff_sweep_loocv(
+    discriminator,
+    config: SoftMotifSelectionConfig,
+    score_cutoffs: list[float] | np.ndarray,
+    random_state: int = 0,
+    show_progress: bool = True,
+) -> pd.DataFrame:
+    """Sweep final-score cutoffs in leakage-safe LOOCV.
+
+    Motif scores are computed using only each training fold. For every cutoff,
+    motifs with ``final_score >= cutoff`` are selected up to ``config.top_k``;
+    a Random Forest is fit on those selected motifs and predicts the held-out
+    patient. Folds with no selected motifs are counted and excluded from model
+    metrics for that cutoff.
+    """
+    cutoffs = sorted({float(cutoff) for cutoff in score_cutoffs})
+    if any(cutoff < 0 for cutoff in cutoffs):
+        raise ValueError("score_cutoffs must be non-negative.")
+
+    patient_class_df = discriminator.get_patients_class(config.labels)
+    local_classes = _prepare_patient_classes(patient_class_df, config.labels)
+    full_motifs_df = discriminator.cism.motifs_dataset
+    scoring_config = replace(config, final_score_cutoff=None)
+    rows_by_cutoff = {
+        cutoff: {
+            "true": [],
+            "pred": [],
+            "positive_probability": [],
+            "selected_counts": [],
+            "empty_folds": 0,
+        }
+        for cutoff in cutoffs
+    }
+
+    for held_out_patient in tqdm(
+        local_classes.index,
+        desc="Sweeping soft motif score cutoffs",
+        leave=False,
+        disable=not show_progress,
+    ):
+        train_classes = local_classes.drop(index=held_out_patient)
+        test_classes = local_classes.loc[[held_out_patient]]
+        train_motifs = full_motifs_df[full_motifs_df["Patient_uId"].isin(train_classes.index)]
+        test_motifs = full_motifs_df[full_motifs_df["Patient_uId"].isin(test_classes.index)]
+
+        train_result = score_soft_motifs(
+            motifs_df=train_motifs,
+            patient_class_df=train_classes,
+            config=scoring_config,
+            stability=None,
+        )
+        y_train = train_classes[DiscriminativeMotifs.PATIENT_CLASS]
+        y_test = test_classes[DiscriminativeMotifs.PATIENT_CLASS].iloc[0]
+        test_matrix = build_patient_motif_matrix(test_motifs, patient_ids=test_classes.index)
+
+        for cutoff in cutoffs:
+            selected = _select_from_score_table(
+                train_result.scores,
+                motif_col="ID",
+                top_k=config.top_k,
+                final_score_cutoff=cutoff,
+            )
+            cutoff_rows = rows_by_cutoff[cutoff]
+            cutoff_rows["selected_counts"].append(len(selected))
+            if not selected:
+                cutoff_rows["empty_folds"] += 1
+                continue
+
+            x_train = train_result.patient_motif_matrix.reindex(columns=selected, fill_value=0.0)
+            x_test = test_matrix.reindex(columns=selected, fill_value=0.0)
+            clf = RandomForestClassifier(random_state=random_state, n_jobs=-1)
+            clf.fit(x_train, y_train)
+            pred = clf.predict(x_test)[0]
+            prob = clf.predict_proba(x_test)
+            positive_index = np.where(clf.classes_ == config.labels[0])[0][0]
+
+            cutoff_rows["true"].append(y_test)
+            cutoff_rows["pred"].append(pred)
+            cutoff_rows["positive_probability"].append(float(prob[0][positive_index]))
+
+    summary_rows = []
+    for cutoff in cutoffs:
+        cutoff_rows = rows_by_cutoff[cutoff]
+        true = cutoff_rows["true"]
+        pred = cutoff_rows["pred"]
+        probabilities = cutoff_rows["positive_probability"]
+        selected_counts = cutoff_rows["selected_counts"]
+        valid_folds = len(true)
+
+        roc_auc = np.nan
+        accuracy = np.nan
+        balanced_accuracy = np.nan
+        if valid_folds > 0:
+            accuracy = float(accuracy_score(true, pred))
+            if len(set(true)) == 2:
+                balanced_accuracy = float(balanced_accuracy_score(true, pred))
+                binary_true = [1 if label == config.labels[0] else 0 for label in true]
+                roc_auc = float(roc_auc_score(binary_true, probabilities))
+
+        summary_rows.append(
+            {
+                "final_score_cutoff": cutoff,
+                "roc_auc": roc_auc,
+                "accuracy": accuracy,
+                "balanced_accuracy": balanced_accuracy,
+                "mean_selected_motifs": float(np.mean(selected_counts)) if selected_counts else np.nan,
+                "median_selected_motifs": float(np.median(selected_counts)) if selected_counts else np.nan,
+                "min_selected_motifs": int(np.min(selected_counts)) if selected_counts else 0,
+                "max_selected_motifs": int(np.max(selected_counts)) if selected_counts else 0,
+                "valid_folds": valid_folds,
+                "empty_folds": int(cutoff_rows["empty_folds"]),
+                "total_folds": len(local_classes.index),
+            }
+        )
+
+    return pd.DataFrame(summary_rows)
+
+
 def _prepare_patient_classes(patient_class_df: pd.DataFrame, labels: list[str]) -> pd.DataFrame:
     if DiscriminativeMotifs.PATIENT_CLASS not in patient_class_df.columns:
         raise ValueError(f"patient_class_df must include a '{DiscriminativeMotifs.PATIENT_CLASS}' column.")
@@ -487,6 +688,29 @@ def _filter_motifs(motifs_df: pd.DataFrame, p_value_threshold: float | None) -> 
     if "p_value" not in motifs_df.columns:
         raise ValueError("motifs_df must include p_value when fanmod_p_value_threshold is not None.")
     return motifs_df[motifs_df["p_value"] < p_value_threshold].copy()
+
+
+def _select_scored_motif_ids(
+    scores: pd.DataFrame,
+    top_k: int,
+    final_score_cutoff: float | None,
+) -> list[Any]:
+    selected_scores = scores
+    if final_score_cutoff is not None:
+        selected_scores = selected_scores[selected_scores["final_score"] >= final_score_cutoff]
+    return selected_scores.head(top_k).index.tolist()
+
+
+def _select_from_score_table(
+    scores: pd.DataFrame,
+    motif_col: str,
+    top_k: int,
+    final_score_cutoff: float | None,
+) -> list[Any]:
+    selected_scores = scores
+    if final_score_cutoff is not None:
+        selected_scores = selected_scores[selected_scores["final_score"] >= final_score_cutoff]
+    return selected_scores.head(top_k)[motif_col].tolist()
 
 
 def _score_matrix(

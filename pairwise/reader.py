@@ -48,7 +48,7 @@ class GraphReader:
         df = full_graph_df.copy()
         for _, _, files in os.walk(raw_data_folder + raw_data_folder_type):
             for file in files:
-                if file == "patient_class.csv":
+                if not file.endswith(".txt") or not file.startswith("Patient_"):
                     continue
                 file_path = raw_data_folder + raw_data_folder_type + "/" + file
                 temp_df = pd.DataFrame({"Disease": disease, "file": file, "graph": 0}, index=[0], dtype="O")

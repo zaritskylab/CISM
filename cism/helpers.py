@@ -114,12 +114,43 @@ def parse_leda(lines: [str]) -> nx.Graph:
     return graph
 
 
+def infer_p_value_direction(freq: str, mean_freq: str) -> str:
+    try:
+        freq_value = float(freq)
+        mean_value = float(mean_freq)
+    except (TypeError, ValueError):
+        return "neutral"
+    if np.isnan(freq_value) or np.isnan(mean_value) or freq_value == mean_value:
+        return "neutral"
+    if freq_value > mean_value:
+        return "proliferation"
+    return "absence"
+
+
 def parse_csv(filepath: str, patient_num: int, fov: str) -> pd.DataFrame:
     print(f'parse csv: {filepath} patient_num: {patient_num}, FOV: {fov}')
     df = pd.DataFrame()
     f = open(filepath, "r")
     line = f.readline()
     while not line.endswith('motifs were found.\n'):
+        if line == "":
+            f.close()
+            return pd.DataFrame(
+                columns=[
+                    "ID",
+                    "Patient",
+                    "FOV",
+                    "Freq",
+                    "Count",
+                    "Mean_Freq",
+                    "STD",
+                    "z_score",
+                    "p_value",
+                    "p_value_direction",
+                    "hash",
+                    "motif",
+                ]
+            )
         line = f.readline()
 
     total = line.split(' ')[0]
@@ -139,6 +170,7 @@ def parse_csv(filepath: str, patient_num: int, fov: str) -> pd.DataFrame:
     std_list = []
     z_score_list = []
     p_value_list = []
+    p_value_direction_list = []
     hash_list = []
     motif_list = []
     while 1:
@@ -148,7 +180,16 @@ def parse_csv(filepath: str, patient_num: int, fov: str) -> pd.DataFrame:
             break
 
         # line with result
-        sample_id, freq, count, mean_freq, std, z_score, p_value = line.strip().split(',')
+        fields = line.strip().split(',')
+        if len(fields) not in (7, 8):
+            # FANMOD may append trailing summary/progress lines after the last
+            # motif block. Those lines are not motif records.
+            break
+        if len(fields) == 7:
+            sample_id, freq, count, mean_freq, std, z_score, p_value = fields
+            p_value_direction = infer_p_value_direction(freq, mean_freq)
+        else:
+            sample_id, freq, count, mean_freq, std, z_score, p_value, p_value_direction = fields
 
         leda_instance_lines = []
         while not line.startswith('#+leda'):
@@ -169,6 +210,7 @@ def parse_csv(filepath: str, patient_num: int, fov: str) -> pd.DataFrame:
         std_list.append(std)
         z_score_list.append(z_score if z_score != "undefined" else pd.NA)
         p_value_list.append(p_value)
+        p_value_direction_list.append(p_value_direction)
         hash_list.append(nx.weisfeiler_lehman_graph_hash(graph, node_attr='type'))
         motif_list.append(graph)
 
@@ -188,6 +230,7 @@ def parse_csv(filepath: str, patient_num: int, fov: str) -> pd.DataFrame:
         'STD': std_list,
         'z_score': z_score_list,
         'p_value': p_value_list,
+        'p_value_direction': p_value_direction_list,
         'hash': hash_list,
         'motif': motif_list})],
         ignore_index=True)
@@ -228,7 +271,8 @@ def analyze_file(
 
     pathlib.Path(output_dir + '/' + str(motif_size) + '/').mkdir(exist_ok=True, parents=True)
     result_file = output_dir + '/' + str(motif_size) + '/' + patient_num + '_' + fov + '.csv'
-    if not pathlib.Path(result_file).exists() or force_run_fanmod or pathlib.Path(result_file).stat().st_size < 2048:
+    result_path = pathlib.Path(result_file)
+    if not result_path.exists() or force_run_fanmod or result_path.stat().st_size == 0:
         if not run_fanmod(FANMOD_exe=FANMOD_exe,
                           FANMOD_path=FANMOD_path,
                           iterations=iterations,
@@ -263,6 +307,11 @@ def analyze_file(
     we cleanup those result since they are not significant.
     '''
     df = df[~df['Mean_Freq'].isna()]
+    if 'p_value_direction' not in df.columns:
+        df['p_value_direction'] = df.apply(
+            lambda row: infer_p_value_direction(row['Freq'], row['Mean_Freq']),
+            axis=1,
+        )
 
     df['ID'] = df.ID.astype('int64')
     df['Patient'] = df.Patient.astype('int16')

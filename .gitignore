@@ -49,3 +49,35 @@ fanmod_output/
 fanmod_cache/
 *.out
 *.dump
+
+# Revision analysis inputs and generated results (code-only branch)
+.venv*/
+/data/
+/external/
+/tutorial_runtime/
+**/runtime/
+**/serialized/
+**/prepared/
+**/executions/
+**/native_executions/
+**/runs/
+**/excluded_runs/
+/analysis/reports/
+/motif_noise_summary_outputs/
+/motif_induced_distribution_analysis/
+/run_distribution_analysis/
+*.pkl
+*.pickle
+*.df_cache
+*.parquet
+*.npz
+*.npy
+*.mat
+*.log
+*.pdf
+*.png
+*.svg
+
+# Shell and scheduler launchers are intentionally omitted
+*.sh
+*.sbatch
