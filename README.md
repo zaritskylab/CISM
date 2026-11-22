@@ -6,6 +6,46 @@ Cell, Volume 174, Issue 6, 1373 - 1387.e19).)
 
 CISM is a two-step method to identify local interconnected cell structures associated with a disease state in single cell spatial proteomics data.
 
+## Analysis table of contents
+
+Use this table to find the code for each paper-revision analysis. Each topic folder has a README listing its scripts. The [detailed analysis index](analysis/README.md) includes execution guidance, and [source_layout.json](analysis/source_layout.json) maps the original source paths to the organized locations.
+
+| Analysis | What it covers | Location |
+| --- | --- | --- |
+| Absent and underrepresented motifs | Class-depleted motifs, two-tailed significance, motif composition, and stringency tradeoffs. | [analysis/absent_motifs/](analysis/absent_motifs/) |
+| Parameter robustness and uncertainty | Motif-size and stringency sensitivity, execution variability, motif recovery, patient-bootstrap uncertainty, and CRC/TNBC extensions. | [analysis/cism_robustness_revision/](analysis/cism_robustness_revision/) |
+| Cohort imbalance | Patient-class imbalance, bootstrap stringency selection, and stability of motif unions across folds. | [analysis/cohort_imbalance/](analysis/cohort_imbalance/) |
+| CosMx dataset preparation | cSCC and HNSCC metadata preparation, RNA subtype reconstruction, screening subsets, and CISM pipeline code. | [analysis/cosmx_preparation/](analysis/cosmx_preparation/) |
+| CRC characterization | Cell-type frequencies and hierarchy, motif composition, pairwise interactions, original-label reconstruction, and singleton classifier controls. | [analysis/crc_characterization/](analysis/crc_characterization/) |
+| Marker ownership and unidentified cells | Marker attribution, spillover, unidentified-cell neighborhood enrichment, HEV/mECA79 motif examples, and microscopy figure code. | [analysis/marker_ownership/](analysis/marker_ownership/) |
+| Melanoma characterization | Motif prevalence, instance distances and scores, fixed-stringency analyses, and supplementary-table preparation. | [analysis/melanoma_characterization/](analysis/melanoma_characterization/) |
+| Patient motif clustering | FANMOD patient-motif clustering, PCA, k-means, disease-state associations, and cluster figure code. | [analysis/motif_clustering/](analysis/motif_clustering/) |
+| Noise robustness | FANMOD perturbation and retrial comparisons, motif-induced cell/pair distributions, and robustness summaries. | [analysis/noise_robustness/](analysis/noise_robustness/) |
+| Patient-level composition and interactions | Patient-level cell-type composition and interaction tests, hierarchical spatial null models, and independent validation. | [analysis/patient_level_validation/](analysis/patient_level_validation/) |
+| Patient-label permutation controls | CRC, TNBC, and melanoma permutation tests, matched classifier evaluation, aggregation, and control figures. | [analysis/permutation_controls/](analysis/permutation_controls/) |
+| SMORE comparison | Matched SMORE/CISM cohorts and evaluation, MATLAB compatibility code, timing, result audits, and comparison figures. | [analysis/smore_comparison/](analysis/smore_comparison/) |
+| Spatial and tissue density | Motif density, tissue density, edge correction, nearest-neighbor comparisons, and spatial point-null sensitivity. | [analysis/spatial_density/](analysis/spatial_density/) |
+| Field-of-view scale and resolution | Cropped and split FOV experiments, cell counts, spatial resolution, stringency, and motif retention. | [analysis/spatial_scale/](analysis/spatial_scale/) |
+| Multiclass melanoma classification | One-vs-one and one-vs-all confidence stacking, motif panels, cohort variants, and evaluation. | [multi_class/](multi_class/) |
+| Graph neural network comparison | Graph data preparation, GCN classification, and explanation code. | [GCN/](GCN/) |
+
+### Notebooks and tutorials
+
+| Notebook or collection | Purpose | Location |
+| --- | --- | --- |
+| General CISM tutorials | Data preparation, FANMOD initialization, analysis of serialized CISM objects, and soft motif selection. | [tutorials/](tutorials/) |
+| Melanoma tutorials | Melanoma preparation, initialization, motif selection, lasso refinement, and motif frequencies. | [melanoma_tutorials/](melanoma_tutorials/) |
+| CRC notebook | CRC cohort analysis and motif discovery. | [CISM_on_CRC.ipynb](CISM_on_CRC.ipynb) |
+| Motif cell-type distribution | Cell-type distributions within motifs. | [in_motif_cell_type_distribution.ipynb](in_motif_cell_type_distribution.ipynb) |
+| Melanoma classification notebook | Notebook-based melanoma classification analysis. | [melanoma classification.ipynb](melanoma%20classification.ipynb) |
+| Unidentified-cell post-processing | Post-processing and cluster characterization of unidentified cells. | [unidentified_post_process.ipynb](unidentified_post_process.ipynb) |
+| Imbalance results notebook | Inspection of saved bootstrap imbalance and stringency results. | [imbalanced_bootstrap_results.ipynb](analysis/cohort_imbalance/imbalanced_bootstrap_results.ipynb) |
+| Multiclass results notebook | Inspection of saved multiclass classification results. | [results.ipynb](multi_class/results.ipynb) |
+
+The shared implementation lives in [cism/](cism/), pairwise comparison code in [pairwise/](pairwise/), and regression tests in [tests/](tests/).
+
+This branch includes code, usage documentation, and notebooks with saved outputs cleared. Input datasets, serialized objects, intermediate results, generated plots/reports, shell scripts, and scheduler launchers are excluded from the revision additions. Some analyses require external data or historical saved results; see the topic READMEs and script arguments before running them.
+
 ### Installation and Dependencies
 
 #### Prerequisite
@@ -216,7 +256,3 @@ discover_result.discriminative_motifs will plot the full dataframe with all the 
     ....
 
 ##### For more comprehensive explanation please refer to TNBC notebook demo under the demo folder [Notebook](./analysis/Tutorial/mibitof_tnbc_tutorial.ipynb)
-
-## Paper revision analyses
-
-The [analysis topic index](analysis/README.md) links to the revision code and usage instructions. Notebooks are committed without saved outputs; generated results and input datasets remain external.
